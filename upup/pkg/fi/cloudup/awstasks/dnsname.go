@@ -43,6 +43,7 @@ type DNSName struct {
 }
 
 func (e *DNSName) Find(c *fi.Context) (*DNSName, error) {
+	fmt.Println("**** dnsname.FIND")
 	cloud := c.Cloud.(awsup.AWSCloud)
 
 	if e.Zone == nil || e.Zone.ZoneID == nil {
@@ -124,7 +125,7 @@ func (e *DNSName) Find(c *fi.Context) (*DNSName, error) {
 					return nil, err
 				}
 				tags := tagMap[loadBalancerName]
-				nameTag, _ := awsup.FindELBTag(tags, "Name")
+				nameTag, _ := awsup.FindELBV2Tag(tags, "Name")
 				if nameTag == "" {
 					return nil, fmt.Errorf("Found ELB %q linked to DNS name %q, but it did not have a Name tag", loadBalancerName, fi.StringValue(e.Name))
 				}
