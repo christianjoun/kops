@@ -17,6 +17,8 @@ limitations under the License.
 package awstasks
 
 import (
+	"fmt"
+
 	"github.com/aws/aws-sdk-go/service/elb"
 	"k8s.io/kops/upup/pkg/fi"
 )
@@ -38,6 +40,7 @@ func (e *LoadBalancerHealthCheck) GetDependencies(tasks map[string]fi.Task) []fi
 }
 
 func findHealthCheck(lb *elb.LoadBalancerDescription) (*LoadBalancerHealthCheck, error) {
+	fmt.Println("****findHealthCheck:loadbalancer_healthchecks.go")
 	if lb == nil || lb.HealthCheck == nil {
 		return nil, nil
 	}

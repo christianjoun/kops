@@ -47,6 +47,7 @@ type LoadBalancerAttachment struct {
 }
 
 func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, error) {
+	fmt.Println("****FIND:Load_balancer_attchement.go")
 	cloud := c.Cloud.(awsup.AWSCloud)
 
 	// Instance only
@@ -101,6 +102,7 @@ func (e *LoadBalancerAttachment) Run(c *fi.Context) error {
 }
 
 func (s *LoadBalancerAttachment) CheckChanges(a, e, changes *LoadBalancerAttachment) error {
+	fmt.Println("****CheckChanges::Load_balancer_attchement.go")
 	if a == nil {
 		if e.LoadBalancer == nil {
 			return fi.RequiredField("LoadBalancer")
@@ -113,6 +115,7 @@ func (s *LoadBalancerAttachment) CheckChanges(a, e, changes *LoadBalancerAttachm
 }
 
 func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalancerAttachment) error {
+	fmt.Println("****RenderAWS:Load_balancer_attchement.go")
 	if e.LoadBalancer == nil {
 		return fi.RequiredField("LoadBalancer")
 	}

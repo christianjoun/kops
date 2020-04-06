@@ -22,6 +22,7 @@ import (
 )
 
 func main() {
+	fmt.Println("here?")
 	Execute()
 }
 
