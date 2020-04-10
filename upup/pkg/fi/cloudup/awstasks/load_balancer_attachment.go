@@ -21,7 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
-	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/service/elbv2"
 	"k8s.io/klog"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
@@ -47,6 +47,7 @@ type LoadBalancerAttachment struct {
 }
 
 func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, error) {
+	fmt.Println("****FIND:Load_balancer_attchement.go")
 	cloud := c.Cloud.(awsup.AWSCloud)
 
 	// Instance only
@@ -101,6 +102,7 @@ func (e *LoadBalancerAttachment) Run(c *fi.Context) error {
 }
 
 func (s *LoadBalancerAttachment) CheckChanges(a, e, changes *LoadBalancerAttachment) error {
+	fmt.Println("****CheckChanges::Load_balancer_attchement.go")
 	if a == nil {
 		if e.LoadBalancer == nil {
 			return fi.RequiredField("LoadBalancer")
@@ -113,6 +115,7 @@ func (s *LoadBalancerAttachment) CheckChanges(a, e, changes *LoadBalancerAttachm
 }
 
 func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalancerAttachment) error {
+	fmt.Println("****RenderAWS:Load_balancer_attchement.go")
 	if e.LoadBalancer == nil {
 		return fi.RequiredField("LoadBalancer")
 	}
@@ -132,15 +135,33 @@ func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes 
 			return fmt.Errorf("error attaching autoscaling group to ELB: %v", err)
 		}
 	} else if e.AutoscalingGroup == nil && e.Instance != nil {
-		request := &elb.RegisterInstancesWithLoadBalancerInput{}
-		request.Instances = append(request.Instances, &elb.Instance{InstanceId: e.Instance.ID})
-		request.LoadBalancerName = aws.String(loadBalancerName)
 
-		klog.V(2).Infof("Attaching instance %q to ELB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
-		_, err := t.Cloud.ELB().RegisterInstancesWithLoadBalancer(request)
-		if err != nil {
-			return fmt.Errorf("error attaching instance to ELB: %v", err)
+		//$ aws elbv2 register-targets --region us-east-1 --target-group-arn arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/my-targets/47e93de171b960e8 --targets Id=i-04bdc8b2e2d6fd445 Id=i-0575cea63e62788b5 Id=i-0cf172d2b85d2b8a9
+
+		request := &elbv2.RegisterTargetsInput{
+			TargetGroupArn: aws.String("arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067"),
+			Targets: []*elbv2.TargetDescription{
+				{
+					Id: e.Instance.ID,
+				},
+			},
 		}
+		fmt.Printf("Attaching instance %q to NLB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+		klog.V(2).Infof("Attaching instance %q to NLB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+		_, err := t.Cloud.ELBV2().RegisterTargets(request)
+		if err != nil {
+			return fmt.Errorf("error attaching instance to NLB: %v", err)
+		}
+
+		//request := &elb.RegisterInstancesWithLoadBalancerInput{}
+		//request.Instances = append(request.Instances, &elb.Instance{InstanceId: e.Instance.ID})
+		//request.LoadBalancerName = aws.String(loadBalancerName)
+
+		// klog.V(2).Infof("Attaching instance %q to ELB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+		// _, err := t.Cloud.ELB().RegisterInstancesWithLoadBalancer(request)
+		// if err != nil {
+		// 	return fmt.Errorf("error attaching instance to ELB: %v", err)
+		// }
 	}
 	return nil
 }

@@ -86,6 +86,7 @@ func (_ *LoadBalancerConnectionSettings) GetDependencies(tasks map[string]fi.Tas
 }
 
 func findELBAttributes(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttributes, error) {
+	fmt.Println("****findELBAttributes:LoadBalancer_Attributes")
 	request := &elb.DescribeLoadBalancerAttributesInput{
 		LoadBalancerName: aws.String(name),
 	}
@@ -102,6 +103,7 @@ func findELBAttributes(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttr
 }
 
 func (_ *LoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget, a, e, changes *LoadBalancer) error {
+	fmt.Println("****modifyLoadBalancerAttributes:LoadBalancer_Attributes")
 	if changes.AccessLog == nil &&
 		changes.ConnectionDraining == nil &&
 		changes.ConnectionSettings == nil &&

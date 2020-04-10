@@ -98,6 +98,14 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	var nlb *awstasks.LoadBalancer2
+	{
+		nlb = &awstasks.LoadBalancer2{
+			Name: fi.String("api." + b.ClusterName()),
+		}
+		c.AddTask(nlb)
+	}
+
 	var elb *awstasks.LoadBalancer
 	{
 		loadBalancerName := b.GetELBName32("api")
@@ -151,6 +159,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			},
 
 			Tags: tags,
+			VPC:  b.LinkToVPC(),
 		}
 
 		if lbSpec.CrossZoneLoadBalancing == nil {
@@ -168,6 +177,10 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			elb.Scheme = nil
 		default:
 			return fmt.Errorf("unknown elb Type: %q", lbSpec.Type)
+		}
+
+		if true {
+			elb.Type = fi.String("network")
 		}
 
 		c.AddTask(elb)
