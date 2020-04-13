@@ -18,9 +18,11 @@ package awstasks
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/service/elbv2"
 	"k8s.io/klog"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
@@ -85,7 +87,32 @@ func (_ *LoadBalancerConnectionSettings) GetDependencies(tasks map[string]fi.Tas
 	return nil
 }
 
-func findELBAttributes(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttributes, error) {
+func findELBAttributes(cloud awsup.AWSCloud, LoadBalancerArn string) ([]*elbv2.LoadBalancerAttribute, error) {
+	fmt.Println("****findELBAttributes:LoadBalancer_Attributes")
+
+	request := &elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: aws.String(LoadBalancerArn),
+	}
+
+	response, err := cloud.ELBV2().DescribeLoadBalancerAttributes(request)
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, nil
+	}
+
+	//we get back an array of attributes
+
+	/*
+	   Key *string `type:"string"`
+	   Value *string `type:"string"`
+	*/
+
+	return response.Attributes, nil
+}
+
+func findELBAttributesOld(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttributes, error) {
 	fmt.Println("****findELBAttributes:LoadBalancer_Attributes")
 	request := &elb.DescribeLoadBalancerAttributesInput{
 		LoadBalancerName: aws.String(name),
@@ -103,6 +130,88 @@ func findELBAttributes(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttr
 }
 
 func (_ *LoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget, a, e, changes *LoadBalancer) error {
+	//TODO: this might run this file w/o changing anything if only targetGroup needs changing..
+	fmt.Println("****modifyLoadBalancerAttributes:LoadBalancer_Attributes")
+	if changes.AccessLog == nil &&
+		changes.ConnectionDraining == nil &&
+		changes.ConnectionSettings == nil &&
+		changes.CrossZoneLoadBalancing == nil {
+		klog.V(4).Infof("No LoadBalancerAttribute changes; skipping update")
+		return nil
+	}
+
+	loadBalancerName := fi.StringValue(e.LoadBalancerName)
+
+	request := &elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: e.LoadBalancerArn, //TODO: e or a or changes????
+	}
+
+	var attributes []*elbv2.LoadBalancerAttribute
+
+	attribute := &elbv2.LoadBalancerAttribute{}
+	attribute.Key = aws.String("load_balancing.cross_zone.enabled")
+	if e.CrossZoneLoadBalancing == nil || e.CrossZoneLoadBalancing.Enabled == nil {
+		attribute.Value = aws.String("false")
+	} else {
+		attribute.Value = aws.String("true")
+	}
+	attributes = append(attributes, attribute)
+
+	request.Attributes = attributes
+
+	klog.V(2).Infof("Configuring NLB attributes for NLB %q", loadBalancerName)
+
+	response, err := t.Cloud.ELBV2().ModifyLoadBalancerAttributes(request)
+	if err != nil {
+		return fmt.Errorf("error configuring NLB attributes for NLB %q: %v", loadBalancerName, err)
+	}
+
+	klog.V(4).Infof("modified NLB attributes for NLB %q, response %+v", loadBalancerName, response)
+
+	return nil
+}
+
+func (_ *LoadBalancer) modifyTargetGroupAttributes(t *awsup.AWSAPITarget, a, e, changes *LoadBalancer) error {
+	//TODO: this might run this file w/o changing anything if only loadbalancer attributes needs changing..
+	fmt.Println("****modifyTargetGroupAttributes:LoadBalancer_Attributes")
+	if changes.AccessLog == nil &&
+		changes.ConnectionDraining == nil &&
+		changes.ConnectionSettings == nil &&
+		changes.CrossZoneLoadBalancing == nil {
+		klog.V(4).Infof("No TargeGroupAttribute changes; skipping update")
+		return nil
+	}
+
+	loadBalancerName := fi.StringValue(e.LoadBalancerName)
+	request := &elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: e.TargetGroupArn, //TODO: e or a or changes????
+	}
+
+	var attributesTG []*elbv2.TargetGroupAttribute
+
+	attribute := &elbv2.TargetGroupAttribute{}
+	attribute.Key = aws.String("deregistration_delay.timeout_seconds")
+	if e.ConnectionDraining == nil || e.ConnectionDraining.Timeout == nil {
+		attribute.Value = aws.String("300")
+	} else {
+		attribute.Value = aws.String(strconv.Itoa(int(*e.ConnectionDraining.Timeout)))
+	}
+
+	attributesTG = append(attributesTG, attribute)
+
+	request.Attributes = attributesTG
+
+	responseTG, err := t.Cloud.ELBV2().ModifyTargetGroupAttributes(request)
+	if err != nil {
+		return fmt.Errorf("error configuring NLB target group attributes for NLB %q: %v", loadBalancerName, err)
+	}
+
+	klog.V(4).Infof("modified NLB target group attributes for NLB %q, response %+v", loadBalancerName, responseTG)
+
+	return nil
+}
+
+func (_ *LoadBalancer) modifyLoadBalancerAttributesOld(t *awsup.AWSAPITarget, a, e, changes *LoadBalancer) error {
 	fmt.Println("****modifyLoadBalancerAttributes:LoadBalancer_Attributes")
 	if changes.AccessLog == nil &&
 		changes.ConnectionDraining == nil &&

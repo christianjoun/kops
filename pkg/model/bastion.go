@@ -17,6 +17,7 @@ limitations under the License.
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -135,6 +136,7 @@ func (b *BastionModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	fmt.Println("IS this shwere its happening?")
 	// Create security group for bastion ELB
 	{
 		t := &awstasks.SecurityGroup{

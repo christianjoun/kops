@@ -125,27 +125,40 @@ func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes 
 	}
 
 	if e.AutoscalingGroup != nil && e.Instance == nil {
-		request := &autoscaling.AttachLoadBalancersInput{}
-		request.AutoScalingGroupName = e.AutoscalingGroup.Name
-		request.LoadBalancerNames = aws.StringSlice([]string{loadBalancerName})
+		//request := &autoscaling.AttachLoadBalancersInput{}
+		//request.AutoScalingGroupName = e.AutoscalingGroup.Name
+		//request.LoadBalancerNames = aws.StringSlice([]string{loadBalancerName})
 
-		klog.V(2).Infof("Attaching autoscaling group %q to ELB %q", fi.StringValue(e.AutoscalingGroup.Name), loadBalancerName)
-		_, err := t.Cloud.Autoscaling().AttachLoadBalancers(request)
+		request := &autoscaling.AttachLoadBalancerTargetGroupsInput{}
+		request.TargetGroupARNs = []*string{e.LoadBalancer.TargetGroupArn}
+		request.AutoScalingGroupName = e.AutoscalingGroup.Name
+
+		/*input := &autoscaling.AttachLoadBalancerTargetGroupsInput{
+			AutoScalingGroupName: e.AutoscalingGroup.Name,
+			TargetGroupARNs: []*string{
+				e.LoadBalancer.TargetGroupArn,
+			},
+		}*/
+
+		klog.V(2).Infof("Attaching autoscaling group %q to NLB %q", fi.StringValue(e.AutoscalingGroup.Name), loadBalancerName)
+		_, err := t.Cloud.Autoscaling().AttachLoadBalancerTargetGroups(request)
 		if err != nil {
-			return fmt.Errorf("error attaching autoscaling group to ELB: %v", err)
+			return fmt.Errorf("error attaching autoscaling group to NLB's target group: %v", err)
 		}
 	} else if e.AutoscalingGroup == nil && e.Instance != nil {
 
 		//$ aws elbv2 register-targets --region us-east-1 --target-group-arn arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/my-targets/47e93de171b960e8 --targets Id=i-04bdc8b2e2d6fd445 Id=i-0575cea63e62788b5 Id=i-0cf172d2b85d2b8a9
-
-		request := &elbv2.RegisterTargetsInput{
+		request := &elbv2.RegisterTargetsInput{}
+		request.TargetGroupArn = e.LoadBalancer.TargetGroupArn
+		request.Targets = []*elbv2.TargetDescription{{Id: e.Instance.ID}}
+		/*request := &elbv2.RegisterTargetsInput{
 			TargetGroupArn: aws.String("arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067"),
 			Targets: []*elbv2.TargetDescription{
 				{
 					Id: e.Instance.ID,
 				},
 			},
-		}
+		}*/
 		fmt.Printf("Attaching instance %q to NLB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
 		klog.V(2).Infof("Attaching instance %q to NLB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
 		_, err := t.Cloud.ELBV2().RegisterTargets(request)

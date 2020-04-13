@@ -47,6 +47,7 @@ type SecurityGroupRule struct {
 	SourceGroup *SecurityGroup
 
 	Egress *bool
+	VPC    *VPC
 }
 
 func (e *SecurityGroupRule) Find(c *fi.Context) (*SecurityGroupRule, error) {
@@ -231,6 +232,13 @@ func (e *SecurityGroupRule) Description() string {
 func (_ *SecurityGroupRule) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *SecurityGroupRule) error {
 	name := fi.StringValue(e.Name)
 
+	if strings.Contains(name, "nlb-health-check-to-master") {
+		fmt.Printf("this is our rule\n")
+	}
+	if strings.Contains(name, "https-elb-to-master") {
+		fmt.Printf("this is also our rule\n")
+	}
+
 	if a == nil {
 		protocol := e.Protocol
 		if protocol == nil {
@@ -250,9 +258,15 @@ func (_ *SecurityGroupRule) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Secu
 				},
 			}
 		} else {
+
+			//ALLOW security group to use vpc cidr.  Precedence is actual cidr value specified when creating securitygrouprule
+			CIDR := e.CIDR
+			if e.VPC != nil /*&& CIDR == nil*/ {
+				CIDR = e.VPC.CIDR
+			}
 			// Default to 0.0.0.0/0 ?
 			ipPermission.IpRanges = []*ec2.IpRange{
-				{CidrIp: e.CIDR},
+				{CidrIp: CIDR},
 			}
 		}
 

@@ -146,14 +146,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			Listeners: listeners,
 
 			// Configure fast-recovery health-checks
+			//NOTE: for NLB you can't use SSL, has to be TCP
 			HealthCheck: &awstasks.LoadBalancerHealthCheck{
-				Target:             fi.String("SSL:443"),
+				Target:             fi.String("TCP:443"), //not using this
 				Timeout:            fi.Int64(5),
 				Interval:           fi.Int64(10),
 				HealthyThreshold:   fi.Int64(2),
 				UnhealthyThreshold: fi.Int64(2),
+				Port:               fi.String("443"),
+				Protocol:           fi.String("TCP"),
 			},
 
+			//connection idle timeout is not configurable for nlb. so
 			ConnectionSettings: &awstasks.LoadBalancerConnectionSettings{
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
 			},
@@ -172,7 +176,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 
 		switch lbSpec.Type {
 		case kops.LoadBalancerTypeInternal:
-			elb.Scheme = fi.String("internal")
+			elb.Scheme = fi.String("internal") //TODO: test internal with NLB
 		case kops.LoadBalancerTypePublic:
 			elb.Scheme = nil
 		default:
@@ -187,6 +191,11 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 
 	// Create security group for API ELB
+	// TODO: figure out if we need to do removeExtraRules
+	// TODO: this is referenced in other parts of code, need to figure out how to stop it from being
+	// referenced
+	// I0412 16:45:28.182976   73951 loader.go:292]   tmpnlbcluster.k8s.local-addons-storage-aws.addons.k8s.io-v1.7.0
+	// error building tasks: unexpected error resolving task "LoadBalancer/api.tmpnlbcluster.k8s.local": unable to find task "SecurityGroup/api-elb.tmpnlbcluster.k8s.local", referenced from LoadBalancer/api.tmpnlbcluster.k8s.local:.SecurityGroups[0]
 	var lbSG *awstasks.SecurityGroup
 	{
 		lbSG = &awstasks.SecurityGroup{
@@ -207,7 +216,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 
 	// Allow traffic from ELB to egress freely
-	{
+	/*{
 		t := &awstasks.SecurityGroupRule{
 			Name:          fi.String("api-elb-egress"),
 			Lifecycle:     b.SecurityLifecycle,
@@ -216,37 +225,57 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			SecurityGroup: lbSG,
 		}
 		c.AddTask(t)
+	}*/
+
+	masterGroups, err := b.GetSecurityGroups(kops.InstanceGroupRoleMaster)
+	if err != nil {
+		return err
 	}
 
 	// Allow traffic into the ELB from KubernetesAPIAccess CIDRs
 	{
 		for _, cidr := range b.Cluster.Spec.KubernetesAPIAccess {
-			t := &awstasks.SecurityGroupRule{
-				Name:          fi.String("https-api-elb-" + cidr),
-				Lifecycle:     b.SecurityLifecycle,
-				CIDR:          fi.String(cidr),
-				FromPort:      fi.Int64(443),
-				Protocol:      fi.String("tcp"),
-				SecurityGroup: lbSG,
-				ToPort:        fi.Int64(443),
-			}
-			c.AddTask(t)
 
-			// Allow ICMP traffic required for PMTU discovery
-			c.AddTask(&awstasks.SecurityGroupRule{
-				Name:          fi.String("icmp-pmtu-api-elb-" + cidr),
-				Lifecycle:     b.SecurityLifecycle,
-				CIDR:          fi.String(cidr),
-				FromPort:      fi.Int64(3),
-				Protocol:      fi.String("icmp"),
-				SecurityGroup: lbSG,
-				ToPort:        fi.Int64(4),
-			})
+			for _, masterGroup := range masterGroups {
+				suffix := masterGroup.Suffix
+				/*c.AddTask(&awstasks.SecurityGroupRule{
+					Name:          fi.String(fmt.Sprintf("https-elb-to-master%s", suffix)),
+					Lifecycle:     b.SecurityLifecycle,
+					FromPort:      fi.Int64(443),
+					Protocol:      fi.String("tcp"),
+					SecurityGroup: masterGroup.Task,
+					SourceGroup:   lbSG,
+					ToPort:        fi.Int64(443),
+				})*/
+
+				t := &awstasks.SecurityGroupRule{
+					Name:          fi.String(fmt.Sprintf("https-elb-to-master%s-%s", suffix, cidr)),
+					Lifecycle:     b.SecurityLifecycle,
+					CIDR:          fi.String(cidr),
+					FromPort:      fi.Int64(443),
+					Protocol:      fi.String("tcp"),
+					SecurityGroup: masterGroup.Task,
+					ToPort:        fi.Int64(443),
+				}
+				c.AddTask(t)
+
+				// Allow ICMP traffic required for PMTU discovery
+				c.AddTask(&awstasks.SecurityGroupRule{
+					Name:          fi.String(fmt.Sprintf("icmp-pmtu-api-master%s-%s", suffix, cidr)),
+					Lifecycle:     b.SecurityLifecycle,
+					CIDR:          fi.String(cidr),
+					FromPort:      fi.Int64(3),
+					Protocol:      fi.String("icmp"),
+					SecurityGroup: masterGroup.Task,
+					ToPort:        fi.Int64(4),
+				})
+			}
 		}
 	}
 
 	// Add precreated additional security groups to the ELB
-	{
+	// ask what to do, should we add these security groups to the masters security group?
+	/*{
 		for _, id := range b.Cluster.Spec.API.LoadBalancer.AdditionalSecurityGroups {
 			t := &awstasks.SecurityGroup{
 				Name:      fi.String(id),
@@ -259,25 +288,30 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 			elb.SecurityGroups = append(elb.SecurityGroups, t)
 		}
-	}
+	}*/
 
-	masterGroups, err := b.GetSecurityGroups(kops.InstanceGroupRoleMaster)
+	/*masterGroups, err := b.GetSecurityGroups(kops.InstanceGroupRoleMaster)
 	if err != nil {
 		return err
-	}
+	}*/
 
-	// Allow HTTPS to the master instances from the ELB
+	// Can tighten security by allowing only https access from the private ip's of the eni's associated with the nlb's nodes in each availability zone.
+	// Recommended approach is the whole vpc cidr https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html#target-security-groups
+	// Allow HTTPS to the master instances from the NLB
 	{
+		//cidr := "10.0.0.0/8"
 		for _, masterGroup := range masterGroups {
 			suffix := masterGroup.Suffix
 			c.AddTask(&awstasks.SecurityGroupRule{
-				Name:          fi.String(fmt.Sprintf("https-elb-to-master%s", suffix)),
+				Name:          fi.String(fmt.Sprintf("nlb-health-check-to-master%s", suffix)),
 				Lifecycle:     b.SecurityLifecycle,
 				FromPort:      fi.Int64(443),
 				Protocol:      fi.String("tcp"),
 				SecurityGroup: masterGroup.Task,
-				SourceGroup:   lbSG,
 				ToPort:        fi.Int64(443),
+				//CIDR:          b.LinkToVPC(),
+				VPC: b.LinkToVPC(),
+				//CIDR: fi.String(cidr),
 			})
 		}
 	}
@@ -294,6 +328,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, elb)
 	}
 
+	//TODO: test this
 	// When Spotinst Elastigroups are used, there is no need to create
 	// a separate task for the attachment of the load balancer since this
 	// is already done as part of the Elastigroup's creation, if needed.
