@@ -101,7 +101,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	var nlb *awstasks.LoadBalancer2
 	{
 		nlb = &awstasks.LoadBalancer2{
-			Name: fi.String("api." + b.ClusterName()),
+			Name: fi.String("api2." + b.ClusterName()),
 		}
 		c.AddTask(nlb)
 	}
@@ -170,9 +170,14 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			lbSpec.CrossZoneLoadBalancing = fi.Bool(false)
 		}
 
-		elb.CrossZoneLoadBalancing = &awstasks.LoadBalancerCrossZoneLoadBalancing{
-			Enabled: lbSpec.CrossZoneLoadBalancing,
-		}
+		elb.CrossZoneLoadBalancing =
+
+			//elb.LoadBalancerAttributes = make(map[string]string)
+			//elb.LoadBalancerAttributes["load_balancing.cross_zone.enabled"] = "false
+
+			&awstasks.LoadBalancerCrossZoneLoadBalancing{
+				Enabled: lbSpec.CrossZoneLoadBalancing,
+			}
 
 		switch lbSpec.Type {
 		case kops.LoadBalancerTypeInternal:
@@ -297,6 +302,8 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 
 	// Can tighten security by allowing only https access from the private ip's of the eni's associated with the nlb's nodes in each availability zone.
 	// Recommended approach is the whole vpc cidr https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html#target-security-groups
+	// work around suggested here https://forums.aws.amazon.com/thread.jspa?threadID=263245&start=0&tstart=0
+	// https://docs.aws.amazon.com/sdk-for-go/api/aws/arn/
 	// Allow HTTPS to the master instances from the NLB
 	{
 		//cidr := "10.0.0.0/8"

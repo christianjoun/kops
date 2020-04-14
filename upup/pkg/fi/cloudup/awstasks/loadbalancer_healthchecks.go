@@ -46,26 +46,30 @@ func (e *LoadBalancerHealthCheck) GetDependencies(tasks map[string]fi.Task) []fi
 	return nil
 }
 
-func findHealthCheck(cloud awsup.AWSCloud, lb *elbv2.LoadBalancer, TargetGroupArn *string) (*LoadBalancerHealthCheck, error) {
+func findHealthCheck(cloud awsup.AWSCloud, lb *elbv2.LoadBalancer) (*LoadBalancerHealthCheck, error) {
 	/*
 		pseudo code
 		get the targetGroup, and get actual off of it. check that lb is not nill too.
 	*/
 
+	//TODO: is it ok to only have one target group associated with this LoadBalancer. Options are #name the target gruop a certain way, or only have 1 otherise how to find actual?
+
+	loadBalancerArn := lb.LoadBalancerArn
 	klog.V(2).Infof("Requesting Target Group for NLB with Name:%q", lb.LoadBalancerName)
 	fmt.Printf("Requesting Target Group for NLB with Name:%q", lb.LoadBalancerName)
 	request := &elbv2.DescribeTargetGroupsInput{
-		TargetGroupArns: []*string{
-			TargetGroupArn,
-		},
+		// TargetGroupArns: []*string{
+		// 	TargetGroupArn,
+		// },
+		LoadBalancerArn: lb.LoadBalancerArn,
 	}
 	response, err := cloud.ELBV2().DescribeTargetGroups(request)
 	if err != nil {
-		return nil, fmt.Errorf("error querying for target group:%+v", TargetGroupArn)
+		return nil, fmt.Errorf("error querying for target groups associated with LoadBalancerArn:%+v", loadBalancerArn)
 	}
 
 	if len(response.TargetGroups) != 1 {
-		return nil, fmt.Errorf("error wrong # of target groups returned while querying for target group:%+v", TargetGroupArn)
+		return nil, fmt.Errorf("error wrong # of target groups returned while querying for target groups associated with LoadBalancerArn:%+v", loadBalancerArn)
 	}
 
 	tg := response.TargetGroups[0]

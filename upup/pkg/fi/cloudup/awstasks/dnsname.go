@@ -120,14 +120,15 @@ func (e *DNSName) Find(c *fi.Context) (*DNSName, error) {
 				klog.Warningf("Unable to find load balancer with DNS name: %q", dnsName)
 			} else {
 				loadBalancerName := aws.StringValue(lb.LoadBalancerName)
-				tagMap, err := describeLoadBalancerTags(cloud, []string{loadBalancerName})
+				loadBalancerArn := aws.StringValue(lb.LoadBalancerArn)
+				tagMap, err := describeLoadBalancerTags(cloud, []string{loadBalancerArn})
 				if err != nil {
 					return nil, err
 				}
-				tags := tagMap[loadBalancerName]
+				tags := tagMap[loadBalancerName] //TODO: test this peice of code out
 				nameTag, _ := awsup.FindELBV2Tag(tags, "Name")
 				if nameTag == "" {
-					return nil, fmt.Errorf("Found ELB %q linked to DNS name %q, but it did not have a Name tag", loadBalancerName, fi.StringValue(e.Name))
+					return nil, fmt.Errorf("Found NLB %q linked to DNS name %q, but it did not have a Name tag", loadBalancerName, fi.StringValue(e.Name))
 				}
 				actual.TargetLoadBalancer = &LoadBalancer{Name: fi.String(nameTag)}
 			}
@@ -151,6 +152,7 @@ func (s *DNSName) CheckChanges(a, e, changes *DNSName) error {
 }
 
 func (_ *DNSName) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *DNSName) error {
+	fmt.Println("***awstasks/dnsname.go")
 	rrs := &route53.ResourceRecordSet{
 		Name: e.Name,
 		Type: e.ResourceType,

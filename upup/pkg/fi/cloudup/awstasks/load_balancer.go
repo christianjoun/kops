@@ -65,13 +65,17 @@ type LoadBalancer struct {
 
 	HealthCheck            *LoadBalancerHealthCheck
 	AccessLog              *LoadBalancerAccessLog
-	ConnectionDraining     *LoadBalancerConnectionDraining
-	ConnectionSettings     *LoadBalancerConnectionSettings
+	ConnectionDraining     *LoadBalancerConnectionDraining //TODO: remove
+	ConnectionSettings     *LoadBalancerConnectionSettings //TODO: Remove
 	CrossZoneLoadBalancing *LoadBalancerCrossZoneLoadBalancing
 	SSLCertificateID       string
 
-	Tags map[string]string
-	VPC  *VPC
+	Tags               map[string]string
+	VPC                *VPC
+	DeletionProtection *LoadBalancerDeletionProtection
+	ProxyProtocolV2    *TargetGroupProxyProtocolV2
+	Stickiness         *TargetGroupStickiness
+	DeregistationDelay *TargetGroupDeregistrationDelay
 }
 
 var _ fi.CompareWithID = &LoadBalancer{}
@@ -217,7 +221,49 @@ func findLoadBalancerByLoadBalancerName2(cloud awsup.AWSCloud, loadBalancerName 
 	return found[0], nil
 }
 
-func findLoadBalancerByAlias(cloud awsup.AWSCloud, alias *route53.AliasTarget) (*elb.LoadBalancerDescription, error) {
+func findLoadBalancerByAlias(cloud awsup.AWSCloud, alias *route53.AliasTarget) (*elbv2.LoadBalancer, error) {
+	//TODO: test this function works as expected.
+	fmt.Println("**** findLoadBalancerByAlias")
+	// TODO: Any way to avoid listing all ELBs?
+	//request := &elb.DescribeLoadBalancersInput{}
+	request := &elbv2.DescribeLoadBalancersInput{}
+
+	dnsName := aws.StringValue(alias.DNSName)
+	matchDnsName := strings.TrimSuffix(dnsName, ".")
+	if matchDnsName == "" {
+		return nil, fmt.Errorf("DNSName not set on AliasTarget")
+	}
+
+	matchHostedZoneId := aws.StringValue(alias.HostedZoneId)
+
+	found, err := describeLoadBalancers2(cloud, request, func(lb *elbv2.LoadBalancer) bool {
+		// TODO: Filter by cluster?
+
+		if matchHostedZoneId != aws.StringValue(lb.CanonicalHostedZoneId) {
+			return false
+		}
+
+		lbDnsName := aws.StringValue(lb.DNSName)
+		lbDnsName = strings.TrimSuffix(lbDnsName, ".")
+		return lbDnsName == matchDnsName || "dualstack."+lbDnsName == matchDnsName
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error listing NLBs: %v", err)
+	}
+
+	if len(found) == 0 {
+		return nil, nil
+	}
+
+	if len(found) != 1 {
+		return nil, fmt.Errorf("Found multiple NLBs with DNSName %q", dnsName)
+	}
+
+	return found[0], nil
+}
+
+func findLoadBalancerByAliasOld(cloud awsup.AWSCloud, alias *route53.AliasTarget) (*elb.LoadBalancerDescription, error) {
 	fmt.Println("**** findLoadBalancerByAlias")
 	// TODO: Any way to avoid listing all ELBs?
 	request := &elb.DescribeLoadBalancersInput{}
@@ -437,6 +483,7 @@ func describeLoadBalancers2(cloud awsup.AWSCloud, request *elbv2.DescribeLoadBal
 	return found, nil
 }
 
+//TODO rename this function cause it works on targeGroups too?
 //can only request loadbalancertags given a loadbalancerArn
 //returns arns:Tags
 func describeLoadBalancerTags(cloud awsup.AWSCloud, loadBalancerArns []string) (map[string][]*elbv2.Tag, error) {
@@ -451,7 +498,7 @@ func describeLoadBalancerTags(cloud awsup.AWSCloud, loadBalancerArns []string) (
 	request.ResourceArns = aws.StringSlice(loadBalancerArns)
 
 	// TODO: Cache?
-	klog.V(2).Infof("Querying ELB tags for %s", loadBalancerArns)
+	klog.V(2).Infof("Querying ELBV2 api for tags for %s", loadBalancerArns)
 	response, err := cloud.ELBV2().DescribeTags(request)
 	if err != nil {
 		fmt.Println("*** here is our error i hope ***")
@@ -478,23 +525,26 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 		return nil, nil
 	}
 
+	loadBalancerArn := lb.LoadBalancerArn
+	var targetGroupArn *string
 	fmt.Println("I suspect shouldn't go past here because there isn't one")
 	actual := &LoadBalancer{}
 	actual.Name = e.Name
+	actual.Lifecycle = e.Lifecycle
 	actual.LoadBalancerName = lb.LoadBalancerName
 	actual.DNSName = lb.DNSName
 	actual.HostedZoneId = lb.CanonicalHostedZoneId //CanonicalHostedZoneNameID
 	actual.Scheme = lb.Scheme
-	actual.Lifecycle = e.Lifecycle
-	actual.LoadBalancerArn = e.LoadBalancerArn
+	actual.LoadBalancerArn = loadBalancerArn
+	actual.VPC = &VPC{ID: lb.VpcId}
 	//do we want the rest of the items that are not one to one mapping w/ the aws api? ie. listenerArns?
 
-	tagMap, err := describeLoadBalancerTags(cloud, []string{*lb.LoadBalancerArn})
+	tagMap, err := describeLoadBalancerTags(cloud, []string{*loadBalancerArn})
 	if err != nil {
 		return nil, err
 	}
 	actual.Tags = make(map[string]string)
-	for _, tag := range tagMap[*e.LoadBalancerArn] {
+	for _, tag := range tagMap[*loadBalancerArn] {
 		actual.Tags[aws.StringValue(tag.Key)] = aws.StringValue(tag.Value)
 	}
 
@@ -507,9 +557,29 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	}*/
 
 	{
+		//TODO: discuss if necessary to use describeTargetGroupsPages ? right now we are hard coding the limitation to one target group for the nlb. is that fine?
+		//other option, query for all target groups use pagination, and search for the tags or use a special name for the targetGroup and just search by that name. (probably easiset solution)
+		request := &elbv2.DescribeTargetGroupsInput{
+			LoadBalancerArn: loadBalancerArn,
+		}
+		response, err := cloud.ELBV2().DescribeTargetGroups(request)
+		if err != nil {
+			return nil, fmt.Errorf("error querying for NLB Target groups :%v", err)
+		}
+
+		if len(response.TargetGroups) != 1 {
+			return nil, fmt.Errorf("Found multiple Target groups for NLB with arn %q", loadBalancerArn)
+		}
+
+		targetGroupArn = response.TargetGroups[0].TargetGroupArn
+		actual.TargetGroupArn = targetGroupArn
+
+	}
+
+	{
 		//LoadBalancerArn
 		request := &elbv2.DescribeListenersInput{
-			LoadBalancerArn: lb.LoadBalancerArn,
+			LoadBalancerArn: loadBalancerArn,
 		}
 		response, err := cloud.ELBV2().DescribeListeners(request)
 		if err != nil {
@@ -531,20 +601,85 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 
 	}
 
-	healthcheck, err := findHealthCheck(cloud, lb, e.TargetGroupArn)
+	healthcheck, err := findHealthCheck(cloud, lb)
 	if err != nil {
 		return nil, err
 	}
 	actual.HealthCheck = healthcheck
 
-	/*// TODO: Extract attributes
-	lbAttributes, err := findELBAttributes(cloud, aws.StringValue(lb.LoadBalancerArn))
-	if err != nil {
-		return nil, err
-	}
-	klog.V(4).Infof("ELB attributes: %+v", lbAttributes)
+	// TODO: Extract attributes
+	{
+		lbAttributes, err := findLoadBalancerAttributes(cloud, aws.StringValue(loadBalancerArn))
+		if err != nil {
+			return nil, err
+		}
+		klog.V(4).Infof("NLB Load Balancer attributes: %+v", lbAttributes)
 
-	if lbAttributes != nil {
+		actual.AccessLog = &LoadBalancerAccessLog{}
+		actual.DeletionProtection = &LoadBalancerDeletionProtection{}
+		actual.CrossZoneLoadBalancing = &LoadBalancerCrossZoneLoadBalancing{}
+		for _, attribute := range lbAttributes {
+			if attribute.Value == nil { //TODO: what if a value is nil? do we just leave it? something like...
+				continue
+			}
+			switch key, value := attribute.Key, attribute.Value; *key {
+			case "access_logs.s3.enabled":
+				b, _ := strconv.ParseBool(*value) // TODO: check for error
+				actual.AccessLog.Enabled = fi.Bool(b)
+			case "access_logs.s3.bucket":
+				actual.AccessLog.S3BucketName = value
+			case "access_logs.s3.prefix":
+				actual.AccessLog.S3BucketPrefix = value
+			case "deletion_protection.enabled":
+				b, _ := strconv.ParseBool(*value) // TODO: check for error
+				actual.DeletionProtection.Enabled = fi.Bool(b)
+			case "load_balancing.cross_zone.enabled":
+				b, _ := strconv.ParseBool(*value) // TODO: check for error
+				actual.CrossZoneLoadBalancing.Enabled = fi.Bool(b)
+			default:
+				fmt.Printf("unsupported key -- ignoring.\n") // TODO: Return error?
+			}
+		}
+	}
+
+	{
+		tgAttributes, err := findTargetGroupAttributes(cloud, aws.StringValue(targetGroupArn))
+		if err != nil {
+			return nil, err
+		}
+		klog.V(4).Infof("Target Group attributes: %+v", tgAttributes)
+
+		actual.ProxyProtocolV2 = &TargetGroupProxyProtocolV2{}
+		actual.Stickiness = &TargetGroupStickiness{}
+		actual.DeregistationDelay = &TargetGroupDeregistrationDelay{}
+		for _, attribute := range tgAttributes {
+			if attribute.Value == nil { //TODO: what if a value is nil? do we just leave it? something like...
+				continue
+			}
+			switch key, value := attribute.Key, attribute.Value; *key {
+			case "proxy_protocol_v2.enabled":
+				b, _ := strconv.ParseBool(*value) // TODO: check for error
+				actual.ProxyProtocolV2.Enabled = fi.Bool(b)
+			case "stickiness.type":
+				actual.Stickiness.Type = value
+			case "stickiness.enabled":
+				b, _ := strconv.ParseBool(*value) // TODO: check for error
+				actual.Stickiness.Enabled = fi.Bool(b)
+			case "deregistration_delay.timeout_seconds":
+				if n, err := strconv.Atoi(*value); err == nil {
+					m := int64(n)
+					actual.DeregistationDelay.TimeoutSeconds = fi.Int64(m)
+				} else {
+					fmt.Println(s, "is not an integer.") //TODO: check for error
+				}
+
+			default:
+				fmt.Printf("unsupported key -- ignoring.\n") //TODO: return error?
+			}
+		}
+	}
+
+	/*if lbAttributes != nil {
 		actual.AccessLog = &LoadBalancerAccessLog{}
 		if lbAttributes.AccessLog.EmitInterval != nil {
 			actual.AccessLog.EmitInterval = lbAttributes.AccessLog.EmitInterval
@@ -658,7 +793,7 @@ func (s *LoadBalancer) CheckChanges(a, e, changes *LoadBalancer) error {
 			return fi.RequiredField("Subnets")
 		}
 
-		if e.AccessLog != nil {
+		/*if e.AccessLog != nil {
 			if e.AccessLog.Enabled == nil {
 				return fi.RequiredField("Acceslog.Enabled")
 			}
@@ -672,7 +807,7 @@ func (s *LoadBalancer) CheckChanges(a, e, changes *LoadBalancer) error {
 			if e.ConnectionDraining.Enabled == nil {
 				return fi.RequiredField("ConnectionDraining.Enabled")
 			}
-		}
+		}*/
 
 		if e.CrossZoneLoadBalancing != nil {
 			if e.CrossZoneLoadBalancing.Enabled == nil {
@@ -709,21 +844,23 @@ func (_ *LoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalan
 			request.SecurityGroups = append(request.SecurityGroups, sg.ID)
 		}*/
 
-		klog.V(2).Infof("Creating NLB with Name:%q", loadBalancerName)
+		{
+			klog.V(2).Infof("Creating NLB with Name:%q", loadBalancerName)
 
-		response, err := t.Cloud.ELBV2().CreateLoadBalancer(request)
-		if err != nil {
-			return fmt.Errorf("error creating NLB: %v", err)
-		}
+			response, err := t.Cloud.ELBV2().CreateLoadBalancer(request)
+			if err != nil {
+				return fmt.Errorf("error creating NLB: %v", err)
+			}
 
-		if len(response.LoadBalancers) != 1 {
-			return fmt.Errorf("Either too many or too little NBLs were created, wanted to find %q", loadBalancerName)
-		} else {
-			loadBalancer := response.LoadBalancers[0] //TODO: how to avoid doing this
-			e.DNSName = loadBalancer.DNSName
-			e.HostedZoneId = loadBalancer.CanonicalHostedZoneId
-			e.LoadBalancerArn = loadBalancer.LoadBalancerArn
-			loadBalancerArn = fi.StringValue(loadBalancer.LoadBalancerArn) //todo; should i use a local variable ? where can i read more about this
+			if len(response.LoadBalancers) != 1 {
+				return fmt.Errorf("Either too many or too little NBLs were created, wanted to find %q", loadBalancerName)
+			} else {
+				loadBalancer := response.LoadBalancers[0] //TODO: how to avoid doing this
+				e.DNSName = loadBalancer.DNSName
+				e.HostedZoneId = loadBalancer.CanonicalHostedZoneId
+				e.LoadBalancerArn = loadBalancer.LoadBalancerArn
+				loadBalancerArn = fi.StringValue(loadBalancer.LoadBalancerArn) //todo; should i use a local variable ? where can i read more about this
+			}
 		}
 
 		{
@@ -747,6 +884,46 @@ func (_ *LoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalan
 				return err
 			}
 		}
+
+		/// DEBUG CODE TO SEE WHAT WE GET BACK
+		{
+			{
+				lbAttributes, err := findLoadBalancerAttributes(t.Cloud, loadBalancerArn)
+				if err != nil {
+					return err
+				}
+				klog.V(4).Infof("NLB Load Balancer attributes: %+v", lbAttributes)
+				fmt.Printf("NLB Load Balancer attributes: %+v", lbAttributes)
+
+				for _, attribute := range lbAttributes {
+					if attribute.Value == nil { //TODO: what if a value is nil? do we just leave it? something like...
+						fmt.Printf("%+v is empty\n", *attribute.Key)
+						continue
+					}
+					key, val := *attribute.Key, *attribute.Value
+					fmt.Printf("%+v : %+v\n", key, val)
+				}
+			}
+
+			{
+				tgAttributes, err := findTargetGroupAttributes(t.Cloud, aws.StringValue(e.TargetGroupArn))
+				if err != nil {
+					return err
+				}
+				klog.V(4).Infof("Target Group attributes: %+v", tgAttributes)
+				fmt.Printf("Target Group attributes: %+v", tgAttributes)
+
+				for _, attribute := range tgAttributes {
+					if attribute.Value == nil { //TODO: what if a value is nil? do we just leave it? something like...
+						fmt.Printf("%+v is empty\n", *attribute.Key)
+						continue
+					}
+					key, val := *attribute.Key, *attribute.Value
+					fmt.Printf("%+v : %+v\n", key, val)
+				}
+			}
+		}
+
 		{
 			for loadBalancerPort, _ := range e.Listeners {
 				loadBalancerPortInt, err := strconv.ParseInt(loadBalancerPort, 10, 64)
@@ -905,7 +1082,7 @@ func (_ *LoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalan
 			//HealthCheckTimeoutSeconds:  e.HealthCheck.Timeout, //TODO: make sure this is not a settable option for nlbL // With Network Load Balancers, you can't modify this setting.
 		}
 
-		fmt.Printf("Configuring health checks on ELB %q", loadBalancerName)
+		fmt.Printf("Configuring health checks on NLB %q", loadBalancerName)
 		klog.V(2).Infof("Configuring health checks on NLB %q", loadBalancerName)
 		_, err := t.Cloud.ELBV2().ModifyTargetGroup(request)
 		if err != nil {
