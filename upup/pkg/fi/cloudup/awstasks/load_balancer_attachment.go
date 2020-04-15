@@ -83,6 +83,10 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 			actual.AutoscalingGroup = e.AutoscalingGroup
 
 			// Prevent spurious changes
+			// var tmp string
+			// tmp = *e.Name + "tmp"
+			// actual.Name = &tmp
+
 			actual.Name = e.Name // ELB attachments don't have tags
 			actual.Lifecycle = e.Lifecycle
 

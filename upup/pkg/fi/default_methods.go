@@ -19,6 +19,7 @@ package fi
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"k8s.io/kops/util/pkg/reflectutils"
 )
@@ -26,6 +27,16 @@ import (
 // DefaultDeltaRunMethod implements the standard change-based run procedure:
 // find the existing item; compare properties; call render with (actual, expected, changes)
 func DefaultDeltaRunMethod(e Task, c *Context) error {
+
+	//if *e.Name == "api.tmpnlbcluster.k8s.local" {
+	str := reflect.TypeOf(e)
+	if strings.HasSuffix(str.String(), "LoadBalancer") {
+		fmt.Println("break here: ", str)
+	}
+	if strings.Contains(str.String(), "Keypair") {
+		fmt.Println("break here: ", str)
+	}
+
 	var a Task
 	var err error
 
