@@ -569,6 +569,10 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 			return nil, fmt.Errorf("error querying for NLB Target groups :%v", err)
 		}
 
+		if len(response.TargetGroups) == 0 {
+			return nil, fmt.Errorf("Found no Target Groups for NLB don't think this is a normal condition :  %q", loadBalancerArn)
+		}
+
 		if len(response.TargetGroups) != 1 {
 			return nil, fmt.Errorf("Found multiple Target groups for NLB with arn %q", loadBalancerArn)
 		}
