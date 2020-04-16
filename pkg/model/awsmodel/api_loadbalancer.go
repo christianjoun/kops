@@ -346,6 +346,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 				Lifecycle:        b.Lifecycle,
 				AutoscalingGroup: b.LinkToAutoscalingGroup(ig),
 				LoadBalancer:     b.LinkToELB("api"),
+				Flag:             true,
 			})
 		}
 	}

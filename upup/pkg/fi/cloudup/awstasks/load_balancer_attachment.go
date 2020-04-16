@@ -44,6 +44,7 @@ type LoadBalancerAttachment struct {
 	// This will *NOT* unmarshal.. for some reason this pointer is initiated as nil
 	// instead of a pointer to Instance with nil members..
 	Instance *Instance
+	Flag     bool
 }
 
 func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, error) {
@@ -57,14 +58,40 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 	// and b you can get the attached instances. and make sure that this instance is attached.
 	// :)
 
+	e.Flag = false
+
+	targetGroupArn := "arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/api-rename-targets/cf68d21c6e9261ff"
+
 	// Instance only
 	if e.Instance != nil && e.AutoscalingGroup == nil {
 		i, err := e.Instance.Find(c)
 		if err != nil {
 			return nil, fmt.Errorf("unable to find instance: %v", err)
 		}
+
+		found := false
+		{
+			//describe target arn.
+			request := &elbv2.DescribeTargetHealthInput{
+				TargetGroupArn: aws.String(targetGroupArn),
+			}
+			response, err := cloud.ELBV2().DescribeTargetHealth(request)
+			if err != nil {
+				return nil, fmt.Errorf("Error calling Elbv2.DescribeTargetHealth for NLB in loadbalancer attachment: %v", err)
+			}
+
+			for _, o := range response.TargetHealthDescriptions {
+				if *o.Target.Id == *i.ID {
+					found = true
+				}
+			}
+		}
+
 		actual := &LoadBalancerAttachment{}
-		actual.LoadBalancer = e.LoadBalancer
+		if found {
+			actual.LoadBalancer = e.LoadBalancer
+		}
+
 		actual.Instance = i
 		return actual, nil
 		// ASG only
@@ -75,7 +102,7 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 
 		//lb, err := e.LoadBalancer.Find(c)
 		//targetGroupArn := lb.TargetGroupArn
-		targetGroupArn := "arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/api-rename-targets/cf68d21c6e9261ff"
+		//targetGroupArn := "arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/api-rename-targets/cf68d21c6e9261ff"
 
 		//TODO: consider deleting the autoscaling group.
 		g, err := findAutoscalingGroup(cloud, *e.AutoscalingGroup.Name)
@@ -136,7 +163,7 @@ func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes 
 		return fi.RequiredField("LoadBalancer.LoadBalancerName")
 	}
 
-	if e.AutoscalingGroup != nil && e.Instance == nil {
+	if (e.AutoscalingGroup != nil && e.Instance == nil) || !e.Flag {
 		//request := &autoscaling.AttachLoadBalancersInput{}
 		//request.AutoScalingGroupName = e.AutoscalingGroup.Name
 		//request.LoadBalancerNames = aws.StringSlice([]string{loadBalancerName})
