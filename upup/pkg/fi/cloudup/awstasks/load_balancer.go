@@ -66,6 +66,8 @@ type LoadBalancer struct {
 	SSLCertificateID       string
 
 	Tags map[string]string
+
+	Christian *string
 }
 
 var _ fi.CompareWithID = &LoadBalancer{}
@@ -296,6 +298,8 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	actual.HostedZoneId = lb.CanonicalHostedZoneNameID
 	actual.Scheme = lb.Scheme
 	actual.Lifecycle = e.Lifecycle
+	christian := "test"
+	actual.Christian = &christian
 
 	tagMap, err := describeLoadBalancerTags(cloud, []string{*lb.LoadBalancerName})
 	if err != nil {
