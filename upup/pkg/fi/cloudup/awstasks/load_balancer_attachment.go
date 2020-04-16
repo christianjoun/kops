@@ -83,11 +83,11 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 			actual.AutoscalingGroup = e.AutoscalingGroup
 
 			// Prevent spurious changes
-			// var tmp string
-			// tmp = *e.Name + "tmp"
-			// actual.Name = &tmp
+			var tmp string
+			tmp = *e.Name + "-flag"
+			actual.Name = &tmp
 
-			actual.Name = e.Name // ELB attachments don't have tags
+			//actual.Name = e.Name // ELB attachments don't have tags
 			actual.Lifecycle = e.Lifecycle
 
 			return actual, nil
@@ -123,6 +123,35 @@ func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes 
 	loadBalancerName := fi.StringValue(e.LoadBalancer.LoadBalancerName)
 	if loadBalancerName == "" {
 		return fi.RequiredField("LoadBalancer.LoadBalancerName")
+	}
+
+	//check actual for name change. why is it not onchanges? reflection sucks?
+	if true {
+		{
+			request := &autoscaling.AttachLoadBalancersInput{}
+			request.AutoScalingGroupName = e.AutoscalingGroup.Name
+			request.LoadBalancerNames = aws.StringSlice([]string{loadBalancerName})
+
+			klog.V(2).Infof("Attaching autoscaling group %q to ELB %q", fi.StringValue(e.AutoscalingGroup.Name), loadBalancerName)
+			_, err := t.Cloud.Autoscaling().AttachLoadBalancers(request)
+			if err != nil {
+				return fmt.Errorf("error attaching autoscaling group to ELB: %v", err)
+			}
+		}
+	}
+	if false {
+		{
+			request := &elb.RegisterInstancesWithLoadBalancerInput{}
+			request.Instances = append(request.Instances, &elb.Instance{InstanceId: e.Instance.ID}) //how to get this to trigger. where do I get this from?
+			request.LoadBalancerName = aws.String(loadBalancerName)
+
+			klog.V(2).Infof("Attaching instance %q to ELB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+			_, err := t.Cloud.ELB().RegisterInstancesWithLoadBalancer(request)
+			if err != nil {
+				return fmt.Errorf("error attaching instance to ELB: %v", err)
+			}
+		}
+		return nil
 	}
 
 	if e.AutoscalingGroup != nil && e.Instance == nil {
