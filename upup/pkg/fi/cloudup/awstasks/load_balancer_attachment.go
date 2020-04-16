@@ -50,6 +50,13 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 	fmt.Println("****FIND:Load_balancer_attchement.go")
 	cloud := c.Cloud.(awsup.AWSCloud)
 
+	// please check in and clean up your code. I know your waiting to get this part done but still...
+	// sometimes loadbalancer does not have up to date things. we need the real one.
+	// call find on the real loadbalancer (see if you need it in the other state ever but i don't believe so)
+	// that way you can a. get the targetGroupARn.
+	// and b you can get the attached instances. and make sure that this instance is attached.
+	// :)
+
 	// Instance only
 	if e.Instance != nil && e.AutoscalingGroup == nil {
 		i, err := e.Instance.Find(c)
@@ -66,6 +73,11 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 			return nil, fmt.Errorf("LoadBalancer did not have LoadBalancerName set")
 		}
 
+		//lb, err := e.LoadBalancer.Find(c)
+		//targetGroupArn := lb.TargetGroupArn
+		targetGroupArn := "arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/api-rename-targets/cf68d21c6e9261ff"
+
+		//TODO: consider deleting the autoscaling group.
 		g, err := findAutoscalingGroup(cloud, *e.AutoscalingGroup.Name)
 		if err != nil {
 			return nil, err
@@ -74,8 +86,8 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 			return nil, nil
 		}
 
-		for _, name := range g.LoadBalancerNames {
-			if aws.StringValue(name) != *e.LoadBalancer.LoadBalancerName {
+		for _, arn := range g.TargetGroupARNs {
+			if aws.StringValue(arn) != targetGroupArn {
 				continue
 			}
 

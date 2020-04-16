@@ -33,6 +33,9 @@ func DefaultDeltaRunMethod(e Task, c *Context) error {
 	if strings.HasSuffix(str.String(), "LoadBalancer") {
 		fmt.Println("break here: ", str)
 	}
+	if strings.HasSuffix(str.String(), "LoadBalancerAttachment") {
+		fmt.Println("break here: ", str)
+	}
 
 	var a Task
 	var err error

@@ -215,23 +215,25 @@ func (_ *LoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget, a, e,
 	}
 	attributes = append(attributes, attribute)
 
-	attribute = &elbv2.LoadBalancerAttribute{}
-	attribute.Key = aws.String("access_logs.s3.bucket")
-	if e.AccessLog == nil || e.AccessLog.S3BucketName == nil {
-		attribute.Value = aws.String("")
-	} else {
-		attribute.Value = e.AccessLog.S3BucketName
-	}
-	attributes = append(attributes, attribute)
+	/*if *e.AccessLog.Enabled { //TODO: bad_access
+		attribute = &elbv2.LoadBalancerAttribute{}
+		attribute.Key = aws.String("access_logs.s3.bucket")
+		if e.AccessLog == nil || e.AccessLog.S3BucketName == nil {
+			attribute.Value = aws.String("") //TOOD: ValidationError: The value of 'access_logs.s3.bucket' cannot be empty
+		} else {
+			attribute.Value = e.AccessLog.S3BucketName
+			attributes = append(attributes, attribute)
+		}
 
-	attribute = &elbv2.LoadBalancerAttribute{}
-	attribute.Key = aws.String("access_logs.s3.prefix")
-	if e.AccessLog == nil || e.AccessLog.S3BucketPrefix == nil {
-		attribute.Value = aws.String("")
-	} else {
-		attribute.Value = e.AccessLog.S3BucketPrefix
-	}
-	attributes = append(attributes, attribute)
+		attribute = &elbv2.LoadBalancerAttribute{}
+		attribute.Key = aws.String("access_logs.s3.prefix")
+		if e.AccessLog == nil || e.AccessLog.S3BucketPrefix == nil {
+			attribute.Value = aws.String("") //TODO: ValidationError: The value of 'access_logs.s3.bucket' cannot be empty
+		} else {
+			attribute.Value = e.AccessLog.S3BucketPrefix
+			attributes = append(attributes, attribute)
+		}
+	}*/
 
 	attribute = &elbv2.LoadBalancerAttribute{}
 	attribute.Key = aws.String("deletion_protection.enabled")
@@ -247,7 +249,7 @@ func (_ *LoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget, a, e,
 	if e.CrossZoneLoadBalancing == nil || e.CrossZoneLoadBalancing.Enabled == nil {
 		attribute.Value = aws.String("false")
 	} else {
-		attribute.Value = aws.String("true")
+		attribute.Value = aws.String(strconv.FormatBool(aws.BoolValue(e.CrossZoneLoadBalancing.Enabled)))
 	}
 	attributes = append(attributes, attribute)
 

@@ -98,22 +98,22 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
-	var nlb *awstasks.LoadBalancer2
-	{
-		nlb = &awstasks.LoadBalancer2{
-			Name: fi.String("api2." + b.ClusterName()),
-		}
-		c.AddTask(nlb)
-	}
+	// var nlb *awstasks.LoadBalancer2
+	// {
+	// 	nlb = &awstasks.LoadBalancer2{
+	// 		Name: fi.String("api2." + b.ClusterName()),
+	// 	}
+	// 	c.AddTask(nlb)
+	// }
 
 	var elb *awstasks.LoadBalancer
 	{
 		loadBalancerName := b.GetELBName32("api")
 
-		idleTimeout := LoadBalancerDefaultIdleTimeout
-		if lbSpec.IdleTimeoutSeconds != nil {
-			idleTimeout = time.Second * time.Duration(*lbSpec.IdleTimeoutSeconds)
-		}
+		// idleTimeout := LoadBalancerDefaultIdleTimeout
+		// if lbSpec.IdleTimeoutSeconds != nil {
+		// 	idleTimeout = time.Second * time.Duration(*lbSpec.IdleTimeoutSeconds)
+		// }
 
 		listeners := map[string]*awstasks.LoadBalancerListener{
 			"443": {InstancePort: 443},
@@ -139,28 +139,28 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			Lifecycle: b.Lifecycle,
 
 			LoadBalancerName: fi.String(loadBalancerName),
-			SecurityGroups: []*awstasks.SecurityGroup{
+			/*SecurityGroups: []*awstasks.SecurityGroup{
 				b.LinkToELBSecurityGroup("api"),
-			},
+			},*/
 			Subnets:   elbSubnets,
 			Listeners: listeners,
 
 			// Configure fast-recovery health-checks
 			//NOTE: for NLB you can't use SSL, has to be TCP
 			HealthCheck: &awstasks.LoadBalancerHealthCheck{
-				Target:             fi.String("TCP:443"), //not using this
-				Timeout:            fi.Int64(5),
-				Interval:           fi.Int64(10),
+				//Target:             fi.String("TCP:443"), //not using this
+				//Timeout:            fi.Int64(5),
+				//Interval:           fi.Int64(10),
 				HealthyThreshold:   fi.Int64(2),
 				UnhealthyThreshold: fi.Int64(2),
 				Port:               fi.String("443"),
-				Protocol:           fi.String("TCP"),
+				//Protocol:           fi.String("TCP"),
 			},
 
 			//connection idle timeout is not configurable for nlb. so
-			ConnectionSettings: &awstasks.LoadBalancerConnectionSettings{
+			/*ConnectionSettings: &awstasks.LoadBalancerConnectionSettings{
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
-			},
+			},*/
 
 			Tags: tags,
 			VPC:  b.LinkToVPC(),

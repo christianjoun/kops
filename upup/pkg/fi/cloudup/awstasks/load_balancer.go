@@ -537,6 +537,8 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	actual.Scheme = lb.Scheme
 	actual.LoadBalancerArn = loadBalancerArn
 	actual.VPC = &VPC{ID: lb.VpcId}
+	actual.Type = lb.Type
+
 	//do we want the rest of the items that are not one to one mapping w/ the aws api? ie. listenerArns?
 
 	tagMap, err := describeLoadBalancerTags(cloud, []string{*loadBalancerArn})
@@ -786,9 +788,9 @@ func (s *LoadBalancer) CheckChanges(a, e, changes *LoadBalancer) error {
 		if fi.StringValue(e.Name) == "" {
 			return fi.RequiredField("Name")
 		}
-		if len(e.SecurityGroups) == 0 {
-			return fi.RequiredField("SecurityGroups")
-		}
+		// if len(e.SecurityGroups) == 0 {
+		// 	return fi.RequiredField("SecurityGroups")
+		// }
 		if len(e.Subnets) == 0 {
 			return fi.RequiredField("Subnets")
 		}
@@ -861,12 +863,19 @@ func (_ *LoadBalancer) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *LoadBalan
 				e.LoadBalancerArn = loadBalancer.LoadBalancerArn
 				loadBalancerArn = fi.StringValue(loadBalancer.LoadBalancerArn) //todo; should i use a local variable ? where can i read more about this
 			}
+
+			// TODO: temporarily putting this here as i am tired of manually deleting the nlb on failed creations
+			if err := t.AddELBV2Tags(loadBalancerArn, e.Tags); err != nil {
+				return err
+			}
 		}
 
 		{
+			first10Char := loadBalancerName[:10]
+			targetGroupName := first10Char + "-targets"
 			//TODO: GET 443/TCP FROM e.loadbalancer
 			request := &elbv2.CreateTargetGroupInput{
-				Name:     aws.String("my-tmpnlb-cluster-targets"),
+				Name:     aws.String(targetGroupName),
 				Port:     aws.Int64(443),
 				Protocol: aws.String("TCP"),
 				VpcId:    e.VPC.ID,

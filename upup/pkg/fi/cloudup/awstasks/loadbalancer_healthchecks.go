@@ -19,7 +19,6 @@ package awstasks
 import (
 	"fmt"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 	"k8s.io/klog"
@@ -82,13 +81,13 @@ func findHealthCheck(cloud awsup.AWSCloud, lb *elbv2.LoadBalancer) (*LoadBalance
 	//TODO: I am trying to map everything 1-1, perhaps better not?
 	actual := &LoadBalancerHealthCheck{}
 	if tg != nil {
-		actual.Timeout = tg.HealthCheckTimeoutSeconds
+		//actual.Timeout = tg.HealthCheckTimeoutSeconds
 		actual.UnhealthyThreshold = tg.UnhealthyThresholdCount
 		actual.HealthyThreshold = tg.HealthyThresholdCount
-		actual.Interval = tg.HealthCheckIntervalSeconds
-		actual.Target = aws.String(*tg.HealthCheckProtocol + ":" + *tg.HealthCheckPort)
+		//actual.Interval = tg.HealthCheckIntervalSeconds
+		//actual.Target = aws.String(*tg.HealthCheckProtocol + ":" + *tg.HealthCheckPort)
 		actual.Port = tg.HealthCheckPort
-		actual.Protocol = tg.HealthCheckProtocol
+		//actual.Protocol = tg.HealthCheckProtocol
 		/*
 			// The port to use to connect with the target.
 			HealthCheckPort *string `type:"string"`
