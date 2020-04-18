@@ -73,10 +73,6 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 			return nil, fmt.Errorf("LoadBalancer did not have LoadBalancerName set")
 		}
 
-		//lb, err := e.LoadBalancer.Find(c)
-		//targetGroupArn := lb.TargetGroupArn
-		targetGroupArn := "arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/api-rename-targets/cf68d21c6e9261ff"
-
 		//TODO: consider deleting the autoscaling group.
 		g, err := findAutoscalingGroup(cloud, *e.AutoscalingGroup.Name)
 		if err != nil {
@@ -86,14 +82,23 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 			return nil, nil
 		}
 
+		tg, err := findTargetGroupByLoadBalancerName(cloud, *e.LoadBalancer.Name)
+		if err != nil {
+			fmt.Printf("error = %v", err)
+		}
+
 		for _, arn := range g.TargetGroupARNs {
-			if aws.StringValue(arn) != targetGroupArn {
+			if aws.StringValue(arn) != *tg.TargetGroupArn {
 				continue
 			}
 
 			actual := &LoadBalancerAttachment{}
 			actual.LoadBalancer = e.LoadBalancer
 			actual.AutoscalingGroup = e.AutoscalingGroup
+
+			// var tmp string
+			// tmp = *e.Name + "flag"
+			// actual.Name = &tmp
 
 			// Prevent spurious changes
 			actual.Name = e.Name // ELB attachments don't have tags
@@ -152,7 +157,7 @@ func (_ *LoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes 
 			},
 		}*/
 
-		klog.V(2).Infof("Attaching autoscaling group %q to NLB %q", fi.StringValue(e.AutoscalingGroup.Name), loadBalancerName)
+		klog.V(2).Infof("Attaching autoscaling group %q to NLB %q's target group", fi.StringValue(e.AutoscalingGroup.Name), loadBalancerName)
 		_, err := t.Cloud.Autoscaling().AttachLoadBalancerTargetGroups(request)
 		if err != nil {
 			return fmt.Errorf("error attaching autoscaling group to NLB's target group: %v", err)

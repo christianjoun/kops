@@ -110,6 +110,17 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	{
 		loadBalancerName := b.GetELBName32("api")
 
+		//Don't know a better way for now to get the autoscaling group names, I need it to detach the targetGroup from them.
+		var agNames []*string
+
+		if !featureflag.Spotinst.Enabled() {
+			for _, ig := range b.MasterInstanceGroups() {
+				name := b.LinkToAutoscalingGroup(ig).GetName()
+				fmt.Println("AG name : %v", *name)
+				agNames = append(agNames, name)
+			}
+		}
+
 		// idleTimeout := LoadBalancerDefaultIdleTimeout
 		// if lbSpec.IdleTimeoutSeconds != nil {
 		// 	idleTimeout = time.Second * time.Duration(*lbSpec.IdleTimeoutSeconds)
@@ -162,8 +173,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
 			},*/
 
-			Tags: tags,
-			VPC:  b.LinkToVPC(),
+			Tags:    tags,
+			VPC:     b.LinkToVPC(),
+			AgNames: agNames,
 		}
 
 		if lbSpec.CrossZoneLoadBalancing == nil {
@@ -341,6 +353,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	// is already done as part of the Elastigroup's creation, if needed.
 	if !featureflag.Spotinst.Enabled() {
 		for _, ig := range b.MasterInstanceGroups() {
+			name := b.LinkToAutoscalingGroup(ig).GetName()
+			fmt.Println("is this what i need? : %v", *name)
+
 			c.AddTask(&awstasks.LoadBalancerAttachment{
 				Name:             fi.String("api-" + ig.ObjectMeta.Name),
 				Lifecycle:        b.Lifecycle,
