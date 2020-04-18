@@ -102,6 +102,14 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	{
 		loadBalancerName := b.GetELBName32("api")
 
+		var agNames []*string
+
+		if !featureflag.Spotinst.Enabled() {
+			for _, ig := range b.MasterInstanceGroups() {
+				agNames = append(agNames, b.LinkToAutoscalingGroup(ig).GetName())
+			}
+		}
+
 		idleTimeout := LoadBalancerDefaultIdleTimeout
 		if lbSpec.IdleTimeoutSeconds != nil {
 			idleTimeout = time.Second * time.Duration(*lbSpec.IdleTimeoutSeconds)
@@ -150,7 +158,8 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
 			},
 
-			Tags: tags,
+			Tags:    tags,
+			AgNames: agNames,
 		}
 
 		if lbSpec.CrossZoneLoadBalancing == nil {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/route53"
 	"k8s.io/klog"
@@ -65,7 +66,8 @@ type LoadBalancer struct {
 	CrossZoneLoadBalancing *LoadBalancerCrossZoneLoadBalancing
 	SSLCertificateID       string
 
-	Tags map[string]string
+	Tags    map[string]string
+	AgNames []*string
 }
 
 var _ fi.CompareWithID = &LoadBalancer{}
@@ -100,6 +102,60 @@ func (e *LoadBalancerListener) mapToAWS(loadBalancerPort int64) *elb.Listener {
 var _ fi.HasDependencies = &LoadBalancerListener{}
 
 func (e *LoadBalancerListener) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+func (e *LoadBalancer) DeleteLoadBalancerAndCleanup(c *fi.Context) error {
+	fmt.Printf("**** DeleteLoadBalancerAndCleanup - e.name = %v\n", *e.Name)
+	cloud := c.Cloud.(awsup.AWSCloud)
+	//so what I have been doing is manually deleting the nlb.
+	lb, err := FindLoadBalancerByNameTag(cloud, fi.StringValue(e.Name))
+	if err != nil {
+		return err
+	}
+	if lb == nil {
+		fmt.Printf("didn't find loadBalancer, however, will attempt to cleanup TargetGroup and deregisterTargetGroup From autoscaling group")
+		//return nil
+	}
+
+	var loadBalancerName *string
+	loadBalancerName = lb.LoadBalancerName
+
+	if true { //locate TargetGroup
+		{ //detach from autoscaling group
+			for _, autoScalingGroupName := range e.AgNames {
+
+				request := &autoscaling.DetachLoadBalancersInput{
+					AutoScalingGroupName: autoScalingGroupName,
+					LoadBalancerNames: []*string{
+						loadBalancerName,
+					},
+				}
+
+				_, err := cloud.Autoscaling().DetachLoadBalancers(request)
+				if err != nil {
+					//fmt.Println("Skipping error for fun -- as billy woudl say letting it roll, %v", err)
+					return fmt.Errorf("Error Detaching LoadBalancers from Autoscaling group : %v", err)
+				}
+			}
+		}
+		{ //Delete lb
+			fmt.Printf("Deleting ELB :%v\n", e.Name)
+
+			request := &elb.DeleteLoadBalancerInput{
+				LoadBalancerName: loadBalancerName,
+			}
+
+			_, err := cloud.ELB().DeleteLoadBalancer(request)
+
+			if err != nil {
+				return fmt.Errorf("Unable to delete ELB : %v", err)
+			}
+		}
+	}
+	{
+		//de-register target group from autoscaling group -- already being handled in loadBalancerAttachment for now
+	}
 	return nil
 }
 
@@ -280,6 +336,13 @@ func describeLoadBalancerTags(cloud awsup.AWSCloud, loadBalancerNames []string) 
 
 func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	cloud := c.Cloud.(awsup.AWSCloud)
+
+	if false {
+		err := e.DeleteLoadBalancerAndCleanup(c)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	lb, err := FindLoadBalancerByNameTag(cloud, fi.StringValue(e.Name))
 	if err != nil {
