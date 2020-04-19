@@ -86,6 +86,9 @@ func (e *LoadBalancerAttachment) Find(c *fi.Context) (*LoadBalancerAttachment, e
 		if err != nil {
 			fmt.Printf("error = %v", err)
 		}
+		if tg == nil { //should this return e.AutoscalingGroup w/ e.LoadBalancer?
+			return nil, nil
+		}
 
 		for _, arn := range g.TargetGroupARNs {
 			if aws.StringValue(arn) != *tg.TargetGroupArn {

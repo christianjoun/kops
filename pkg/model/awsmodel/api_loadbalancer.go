@@ -173,9 +173,10 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
 			},*/
 
-			Tags:    tags,
-			VPC:     b.LinkToVPC(),
-			AgNames: agNames,
+			Tags:         tags,
+			VPC:          b.LinkToVPC(),
+			AgNames:      agNames,
+			UseNLBForAPI: fi.Bool(true),
 		}
 
 		if lbSpec.CrossZoneLoadBalancing == nil {

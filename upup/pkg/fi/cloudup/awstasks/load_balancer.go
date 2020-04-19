@@ -78,6 +78,7 @@ type LoadBalancer struct {
 	Stickiness         *TargetGroupStickiness
 	DeregistationDelay *TargetGroupDeregistrationDelay
 	AgNames            []*string
+	UseNLBForAPI       *bool
 }
 
 var _ fi.CompareWithID = &LoadBalancer{}
@@ -141,6 +142,137 @@ func (e *LoadBalancerListener) GetDependencies(tasks map[string]fi.Task) []fi.Ta
 	return nil
 }
 
+type deleteLoadBalancer struct {
+	request *elbv2.DeleteLoadBalancerInput
+}
+
+var _ fi.Deletion = &deleteLoadBalancer{}
+
+func (d *deleteLoadBalancer) TaskName() string {
+	return "LoadBalancer"
+}
+
+func (d *deleteLoadBalancer) Item() string {
+	return aws.StringValue(d.request.LoadBalancerArn)
+}
+
+func (d *deleteLoadBalancer) Delete(t fi.Target) error {
+	klog.V(2).Infof("deleting nlb %v", d)
+
+	awsTarget, ok := t.(*awsup.AWSAPITarget)
+	if !ok {
+		return fmt.Errorf("unexpected target type for deletion: %T", t)
+	}
+
+	name := aws.StringValue(d.request.LoadBalancerArn)
+	klog.V(2).Infof("Calling elb DeleteLoadBalancer for %s", name)
+
+	_, err := awsTarget.Cloud.ELBV2().DeleteLoadBalancer(d.request)
+
+	if err != nil {
+		return fmt.Errorf("error deleting nlb %s: %v", name, err)
+	}
+
+	return nil
+}
+
+func (d *deleteLoadBalancer) String() string {
+	return d.TaskName() + "-" + d.Item()
+}
+
+type detachLoadBalancer struct {
+	request *autoscaling.DetachLoadBalancerTargetGroupsInput
+}
+
+var _ fi.Deletion = &detachLoadBalancer{}
+
+func (d *detachLoadBalancer) TaskName() string {
+	return "Autoscaling LoadBalancerTargetGroupAttachment"
+}
+
+func (d *detachLoadBalancer) Item() string {
+	tmp := *d.request.TargetGroupARNs[0] + " -> " + *d.request.AutoScalingGroupName
+	return aws.StringValue(&tmp)
+}
+
+func (d *detachLoadBalancer) Delete(t fi.Target) error {
+	klog.V(2).Infof("deleting elb %v", d)
+
+	awsTarget, ok := t.(*awsup.AWSAPITarget)
+	if !ok {
+		return fmt.Errorf("unexpected target type for deletion: %T", t)
+	}
+
+	name := aws.StringValue(d.request.AutoScalingGroupName)
+	klog.V(2).Infof("Calling autoscaling Detach LoadBalancer for autoscaling group %s", name)
+
+	_, err := awsTarget.Cloud.Autoscaling().DetachLoadBalancerTargetGroups(d.request)
+
+	if err != nil {
+		return fmt.Errorf("Error Detaching LoadBalancer TargetGroup from Autoscaling group : %v", err)
+	}
+
+	return nil
+}
+
+func (d *detachLoadBalancer) String() string {
+	return d.TaskName() + "-" + d.Item()
+}
+
+func (e *LoadBalancer) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
+	var removals []fi.Deletion
+
+	cloud := c.Cloud.(awsup.AWSCloud)
+
+	if !*e.UseNLBForAPI {
+		lb, err := FindLoadBalancerByNameTag(cloud, fi.StringValue(e.Name))
+
+		if err != nil {
+			return nil, err
+		}
+
+		if lb != nil {
+
+			request := &elbv2.DeleteLoadBalancerInput{
+				LoadBalancerArn: lb.LoadBalancerArn,
+			}
+
+			removals = append(removals, &deleteLoadBalancer{request: request})
+			klog.V(2).Infof("will delete load balancer: %v", lb.LoadBalancerName)
+		}
+
+		for _, autoScalingGroupName := range e.AgNames {
+
+			request := &autoscaling.DescribeLoadBalancerTargetGroupsInput{
+				AutoScalingGroupName: autoScalingGroupName,
+			}
+
+			response, err := cloud.Autoscaling().DescribeLoadBalancerTargetGroups(request)
+
+			if err != nil {
+				return nil, fmt.Errorf("Error querying Autoscaling to describe nlb's : %v", err)
+			}
+
+			for _, LoadBalancerState := range response.LoadBalancerTargetGroups { //detach all elbs from autoscaling group
+
+				targetGroupArn := LoadBalancerState.LoadBalancerTargetGroupARN
+
+				request := &autoscaling.DetachLoadBalancerTargetGroupsInput{
+					AutoScalingGroupName: autoScalingGroupName,
+					TargetGroupARNs: []*string{
+						targetGroupArn,
+					},
+				}
+
+				removals = append(removals, &detachLoadBalancer{request: request})
+				klog.V(2).Infof("will detach load balancer: %v from autoscalinggroup %v", lb.LoadBalancerArn, autoScalingGroupName)
+			}
+		}
+	}
+
+	return removals, nil
+}
+
 // func findLoadBalancerByLoadBalancerName2(cloud awsup.AWSCloud, loadBalancerName string) (*elbv2.Load .LoadBalancerDescription, error) {
 // 	fmt.Println("")
 // 	request := &elbv2.DescribeLoadBalancersInput{
@@ -155,6 +287,10 @@ func findTargetGroupByLoadBalancerName(cloud awsup.AWSCloud, loadBalancerNameTag
 	lb, err := FindLoadBalancerByNameTag(cloud, loadBalancerNameTag)
 	if err != nil {
 		return nil, fmt.Errorf("Can't locate NLB with Name Tag %v in findTargetGroupByLoadBalancerName : %v", loadBalancerNameTag, err)
+	}
+
+	if lb == nil { //should this be an error?
+		return nil, nil
 	}
 
 	request := &elbv2.DescribeTargetGroupsInput{
@@ -367,22 +503,22 @@ func FindLoadBalancerByNameTag(cloud awsup.AWSCloud, findNameTag string) (*elbv2
 			arns = append(arns, arn)
 		}
 
-		fmt.Printf(" describeLoadbalancerPages names = %s\n", names)
+		//fmt.Printf(" describeLoadbalancerPages names = %s\n", names)
 		tagMap, err := describeLoadBalancerTags(cloud, arns)
 		if err != nil {
 			innerError = err
 			return false
 		}
 
-		fmt.Printf("tagMap from describeLoadBalancerTags = %v\n", tagMap)
+		//fmt.Printf("tagMap from describeLoadBalancerTags = %v\n", tagMap)
 		for loadBalancerArn, tags := range tagMap {
-			fmt.Printf("tags = %s\n", tags)
+			//fmt.Printf("tags = %s\n", tags)
 			name, foundNameTag := awsup.FindELBV2Tag(tags, "Name")
 			if !foundNameTag || name != findNameTag {
-				fmt.Printf("foundNameTag=%+v, name=%+v, findNameTag=%+v, \n", foundNameTag, name, findNameTag)
+				//fmt.Printf("foundNameTag=%+v, name=%+v, findNameTag=%+v, \n", foundNameTag, name, findNameTag)
 				continue
 			}
-			fmt.Printf("found our ELB, the ARN we want is +%v\n", loadBalancerArn)
+			//fmt.Printf("found our ELB, the ARN we want is +%v\n", loadBalancerArn)
 			elb, ok := arnToELB[loadBalancerArn]
 			if !ok {
 				panic("something wrong")
@@ -543,13 +679,6 @@ func describeLoadBalancerTags(cloud awsup.AWSCloud, loadBalancerArns []string) (
 func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	fmt.Printf("**** Find - e.name = %v\n", *e.Name)
 	cloud := c.Cloud.(awsup.AWSCloud)
-
-	if true {
-		err := e.DeleteLoadBalancerAndDeregisterTargetGroup(c)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	//e.Name = "api." + b.ClusterName()
 	lb, err := FindLoadBalancerByNameTag(cloud, fi.StringValue(e.Name))
@@ -769,6 +898,7 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	}
 
 	actual.AgNames = e.AgNames // just to avoid spurious mismatches Need to get rid of this
+	actual.UseNLBForAPI = e.UseNLBForAPI
 
 	// We allow for the LoadBalancerName to be wrong:
 	// 1. We don't want to force a rename of the ELB, because that is a destructive operation
@@ -859,94 +989,6 @@ func (s *LoadBalancer) CheckChanges(a, e, changes *LoadBalancer) error {
 		}
 	}
 
-	return nil
-}
-
-func (e *LoadBalancer) DeleteLoadBalancerAndDeregisterTargetGroup(c *fi.Context) error {
-	fmt.Printf("**** DeleteLoadBalancerAndDeregisterTargetGroup - e.name = %v\n", *e.Name)
-	cloud := c.Cloud.(awsup.AWSCloud)
-	//so what I have been doing is manually deleting the nlb.
-	lb, err := FindLoadBalancerByNameTag(cloud, fi.StringValue(e.Name))
-	if err != nil {
-		return err
-	}
-	if lb == nil {
-		fmt.Printf("didn't find loadBalancer, however, will attempt to cleanup TargetGroup and deregisterTargetGroup From autoscaling group")
-		//return nil
-	}
-	var targetGroupArn *string
-	var loadBalancerArn *string
-	loadBalancerArn = lb.LoadBalancerArn
-
-	if true { //locate TargetGroup
-		{
-			fmt.Printf("Describing Target Groups for loadBalancerArn : %v\n", loadBalancerArn)
-			request := &elbv2.DescribeTargetGroupsInput{
-				LoadBalancerArn: loadBalancerArn,
-			}
-			response, err := cloud.ELBV2().DescribeTargetGroups(request)
-			if err != nil {
-				return fmt.Errorf("error querying for NLB Target groups :%v", err)
-			}
-
-			if len(response.TargetGroups) == 0 {
-				return fmt.Errorf("Found no Target Groups for NLB don't think this is a normal condition :  %q", loadBalancerArn)
-			}
-
-			if len(response.TargetGroups) != 1 {
-				return fmt.Errorf("Found multiple Target groups for NLB with arn %q", loadBalancerArn)
-			}
-
-			targetGroupArn = response.TargetGroups[0].TargetGroupArn
-		}
-		{ //detach from autoscaling group
-			for _, autoScalingGroupName := range e.AgNames {
-
-				request := &autoscaling.DetachLoadBalancerTargetGroupsInput{
-					AutoScalingGroupName: autoScalingGroupName,
-					TargetGroupARNs: []*string{
-						targetGroupArn,
-					},
-				}
-
-				_, err := cloud.Autoscaling().DetachLoadBalancerTargetGroups(request)
-				if err != nil {
-					fmt.Println("Skipping error for fun -- as billy woudl say letting it roll, %v", err)
-					//return nil, fmt.Errorf("Error Detaching Target Group from Autoscaling group : %v", err)
-				}
-			}
-
-		}
-		{ //Delete lb
-			fmt.Printf("Deleting NLB :%v\n", e.Name)
-
-			request := &elbv2.DeleteLoadBalancerInput{
-				LoadBalancerArn: loadBalancerArn,
-			}
-
-			_, err := cloud.ELBV2().DeleteLoadBalancer(request)
-
-			if err != nil {
-				return fmt.Errorf("Unable to delete NLB : %v", err)
-			}
-		}
-		{ //Delete target group
-
-			fmt.Printf("Deleting Target Group with arn : %v\n", targetGroupArn)
-
-			request := &elbv2.DeleteTargetGroupInput{
-				TargetGroupArn: targetGroupArn,
-			}
-
-			_, err := cloud.ELBV2().DeleteTargetGroup(request)
-			if err != nil {
-				return fmt.Errorf("error Deleting TargetGroup from NLB: %v", err)
-			}
-		}
-	}
-	{
-		//de-register target group from autoscaling group -- already being handled in loadBalancerAttachment for now
-	}
 	return nil
 }
 

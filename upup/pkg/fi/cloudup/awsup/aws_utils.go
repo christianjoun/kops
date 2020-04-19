@@ -155,9 +155,9 @@ func FindELBTag(tags []*elb.Tag, key string) (string, bool) {
 
 // FindELBV2Tag find the value of the tag with the specified key
 func FindELBV2Tag(tags []*elbv2.Tag, key string) (string, bool) {
-	fmt.Println("****FindELBV2Tag")
+	//fmt.Println("****FindELBV2Tag")
 	for _, tag := range tags {
-		fmt.Printf("processing Tag = %+v with key = %+v while searchign for %+v\n", aws.StringValue(tag.Key), aws.StringValue(tag.Value), key)
+		//fmt.Printf("processing Tag = %+v with key = %+v while searchign for %+v\n", aws.StringValue(tag.Key), aws.StringValue(tag.Value), key)
 		if key == aws.StringValue(tag.Key) {
 			return aws.StringValue(tag.Value), true
 		}
