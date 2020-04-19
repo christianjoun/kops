@@ -158,8 +158,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
 			},
 
-			Tags:    tags,
-			AgNames: agNames,
+			Tags:         tags,
+			AgNames:      agNames,
+			UseELBForAPI: fi.Bool(false),
 		}
 
 		if lbSpec.CrossZoneLoadBalancing == nil {
