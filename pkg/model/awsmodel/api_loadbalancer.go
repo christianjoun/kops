@@ -116,9 +116,20 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		if !featureflag.Spotinst.Enabled() {
 			for _, ig := range b.MasterInstanceGroups() {
 				name := b.LinkToAutoscalingGroup(ig).GetName()
-				fmt.Println("AG name : %v", *name)
 				agNames = append(agNames, name)
 			}
+		}
+
+		if true {
+			cleanup := &awstasks.LoadBalancerCleanup{
+				Name:         fi.String("cleanup.api." + b.ClusterName()),
+				AgNames:      agNames,
+				Lifecycle:    b.Lifecycle, //what does this even do?
+				UseNLBForAPI: fi.Bool(false),
+				NLBName:      fi.String("api." + b.ClusterName()),
+			}
+			c.AddTask(cleanup)
+			return nil
 		}
 
 		// idleTimeout := LoadBalancerDefaultIdleTimeout
