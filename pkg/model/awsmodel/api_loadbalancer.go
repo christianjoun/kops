@@ -110,7 +110,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 		}
 
-		if false {
+		if true {
 			cleanup := &awstasks.LoadBalancerCleanup{
 				Name:         fi.String("cleanup.api." + b.ClusterName()),
 				AgNames:      agNames,
