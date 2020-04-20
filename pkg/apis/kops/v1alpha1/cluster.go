@@ -348,8 +348,18 @@ const (
 	LoadBalancerTypeInternal LoadBalancerType = "Internal"
 )
 
+// LoadBalancerClass string describes LoadBalancer classes (classic, network)
+type LoadBalancerClass string
+
+const (
+	LoadBalancerClassClassic LoadBalancerClass = "Classic"
+	LoadBalancerClassNetwork LoadBalancerClass = "Network"
+)
+
 // LoadBalancerAccessSpec provides configuration details related to API LoadBalancer and its access
 type LoadBalancerAccessSpec struct {
+	// Class of load balancer to create may Classic or Network.
+	Class LoadBalancerClass `json:"class,omitempty"`
 	// Type of load balancer to create may Public or Internal.
 	Type LoadBalancerType `json:"type,omitempty"`
 	// IdleTimeoutSeconds sets the timeout of the api loadbalancer.

@@ -18,20 +18,101 @@ package awstasks
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/service/elbv2"
 	"k8s.io/klog"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 )
 
-func findNLBAttributes(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttributes, error) {
-	request := &elb.DescribeLoadBalancerAttributesInput{
-		LoadBalancerName: aws.String(name),
+type NetworkLoadBalancerAccessLog struct {
+	EmitInterval   *int64
+	Enabled        *bool   //TODO: change to S3Enabled
+	S3BucketName   *string //TODO: change to S3Bucket
+	S3BucketPrefix *string //TODO: change to S3Prefix
+}
+
+func (_ *NetworkLoadBalancerAccessLog) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+//type LoadBalancerAdditionalAttribute struct {
+//	Key   *string
+//	Value *string
+//}
+//
+//func (_ *LoadBalancerAdditionalAttribute) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+//	return nil
+//}
+
+type TargetGroupProxyProtocolV2 struct {
+	Enabled *bool
+}
+
+func (_ *TargetGroupProxyProtocolV2) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+type TargetGroupStickiness struct {
+	Enabled *bool
+	Type    *string
+}
+
+func (_ *TargetGroupStickiness) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+type TargetGroupDeregistrationDelay struct {
+	TimeoutSeconds *int64
+}
+
+func (_ *TargetGroupDeregistrationDelay) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+type NetworkLoadBalancerConnectionDraining struct {
+	Enabled *bool
+	Timeout *int64
+}
+
+func (_ *NetworkLoadBalancerConnectionDraining) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+type NetworkLoadBalancerCrossZoneLoadBalancing struct {
+	Enabled *bool
+}
+
+func (_ *NetworkLoadBalancerCrossZoneLoadBalancing) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+type NetworkLoadBalancerConnectionSettings struct {
+	IdleTimeout *int64
+}
+
+func (_ *NetworkLoadBalancerConnectionSettings) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+type NetworkLoadBalancerDeletionProtection struct {
+	Enabled *bool
+}
+
+func (_ *NetworkLoadBalancerDeletionProtection) GetDependencies(tasks map[string]fi.Task) []fi.Task {
+	return nil
+}
+
+func findNetworkLoadBalancerAttributes(cloud awsup.AWSCloud, LoadBalancerArn string) ([]*elbv2.LoadBalancerAttribute, error) {
+	fmt.Println("****findELBAttributes:LoadBalancer_Attributes")
+
+	request := &elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: aws.String(LoadBalancerArn),
 	}
 
-	response, err := cloud.ELB().DescribeLoadBalancerAttributes(request)
+	response, err := cloud.ELBV2().DescribeLoadBalancerAttributes(request)
 	if err != nil {
 		return nil, err
 	}
@@ -39,13 +120,46 @@ func findNLBAttributes(cloud awsup.AWSCloud, name string) (*elb.LoadBalancerAttr
 		return nil, nil
 	}
 
-	return response.LoadBalancerAttributes, nil
+	//we get back an array of attributes
+
+	/*
+	   Key *string `type:"string"`
+	   Value *string `type:"string"`
+	*/
+
+	return response.Attributes, nil
 }
 
-func (_ *NetworkLoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget, a, e, changes *LoadBalancer) error {
+func findTargetGroupAttributes(cloud awsup.AWSCloud, TargetGroupArn string) ([]*elbv2.TargetGroupAttribute, error) {
+	fmt.Println("****findTargetGroupAttributes:LoadBalancer_Attributes")
+
+	request := &elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: aws.String(TargetGroupArn),
+	}
+
+	response, err := cloud.ELBV2().DescribeTargetGroupAttributes(request)
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, nil
+	}
+
+	//we get back an array of attributes
+
+	/*
+	   Key *string `type:"string"`
+	   Value *string `type:"string"`
+	*/
+
+	return response.Attributes, nil
+}
+
+func (_ *NetworkLoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget, a, e, changes *NetworkLoadBalancer) error {
+	//TODO: this might run this file w/o changing anything if only targetGroup needs changing..
+	fmt.Println("****modifyLoadBalancerAttributes:LoadBalancer_Attributes")
 	if changes.AccessLog == nil &&
-		changes.ConnectionDraining == nil &&
-		changes.ConnectionSettings == nil &&
+		changes.DeletionProtection == nil &&
 		changes.CrossZoneLoadBalancing == nil {
 		klog.V(4).Infof("No LoadBalancerAttribute changes; skipping update")
 		return nil
@@ -53,71 +167,131 @@ func (_ *NetworkLoadBalancer) modifyLoadBalancerAttributes(t *awsup.AWSAPITarget
 
 	loadBalancerName := fi.StringValue(e.LoadBalancerName)
 
-	request := &elb.ModifyLoadBalancerAttributesInput{}
-	request.LoadBalancerName = e.LoadBalancerName
-	request.LoadBalancerAttributes = &elb.LoadBalancerAttributes{}
+	request := &elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: e.LoadBalancerArn, //TODO: e or a or changes????
+	}
 
-	// Setting mandatory attributes to default values if empty
-	request.LoadBalancerAttributes.AccessLog = &elb.AccessLog{}
+	var attributes []*elbv2.LoadBalancerAttribute
+
+	// HELP Can't think of a better way to do this...
+	attribute := &elbv2.LoadBalancerAttribute{}
+	attribute.Key = aws.String("access_logs.s3.enabled")
 	if e.AccessLog == nil || e.AccessLog.Enabled == nil {
-		request.LoadBalancerAttributes.AccessLog.Enabled = fi.Bool(false)
-	}
-	request.LoadBalancerAttributes.ConnectionDraining = &elb.ConnectionDraining{}
-	if e.ConnectionDraining == nil || e.ConnectionDraining.Enabled == nil {
-		request.LoadBalancerAttributes.ConnectionDraining.Enabled = fi.Bool(false)
-	}
-	if e.ConnectionDraining == nil || e.ConnectionDraining.Timeout == nil {
-		request.LoadBalancerAttributes.ConnectionDraining.Timeout = fi.Int64(300)
-	}
-	request.LoadBalancerAttributes.ConnectionSettings = &elb.ConnectionSettings{}
-	if e.ConnectionSettings == nil || e.ConnectionSettings.IdleTimeout == nil {
-		request.LoadBalancerAttributes.ConnectionSettings.IdleTimeout = fi.Int64(60)
-	}
-	request.LoadBalancerAttributes.CrossZoneLoadBalancing = &elb.CrossZoneLoadBalancing{}
-	if e.CrossZoneLoadBalancing == nil || e.CrossZoneLoadBalancing.Enabled == nil {
-		request.LoadBalancerAttributes.CrossZoneLoadBalancing.Enabled = fi.Bool(false)
+		attribute.Value = aws.String("false")
 	} else {
-		request.LoadBalancerAttributes.CrossZoneLoadBalancing.Enabled = e.CrossZoneLoadBalancing.Enabled
+		attribute.Value = aws.String(strconv.FormatBool(aws.BoolValue(e.AccessLog.Enabled)))
 	}
+	attributes = append(attributes, attribute)
 
-	// Setting non mandatory values only if not empty
+	/*if *e.AccessLog.Enabled { //TODO: bad_access
+		attribute = &elbv2.LoadBalancerAttribute{}
+		attribute.Key = aws.String("access_logs.s3.bucket")
+		if e.AccessLog == nil || e.AccessLog.S3BucketName == nil {
+			attribute.Value = aws.String("") //TOOD: ValidationError: The value of 'access_logs.s3.bucket' cannot be empty
+		} else {
+			attribute.Value = e.AccessLog.S3BucketName
+			attributes = append(attributes, attribute)
+		}
 
-	// We don't map AdditionalAttributes (yet)
-	//if len(e.AdditionalAttributes) != 0 {
-	//	var additionalAttributes []*elb.AdditionalAttribute
-	//	for index, additionalAttribute := range e.AdditionalAttributes {
-	//		additionalAttributes[index] = &elb.AdditionalAttribute{
-	//			Key:   additionalAttribute.Key,
-	//			Value: additionalAttribute.Value,
-	//		}
-	//	}
-	//	request.LoadBalancerAttributes.AdditionalAttributes = additionalAttributes
-	//}
+		attribute = &elbv2.LoadBalancerAttribute{}
+		attribute.Key = aws.String("access_logs.s3.prefix")
+		if e.AccessLog == nil || e.AccessLog.S3BucketPrefix == nil {
+			attribute.Value = aws.String("") //TODO: ValidationError: The value of 'access_logs.s3.bucket' cannot be empty
+		} else {
+			attribute.Value = e.AccessLog.S3BucketPrefix
+			attributes = append(attributes, attribute)
+		}
+	}*/
 
-	if e.AccessLog != nil && e.AccessLog.EmitInterval != nil {
-		request.LoadBalancerAttributes.AccessLog.EmitInterval = e.AccessLog.EmitInterval
+	attribute = &elbv2.LoadBalancerAttribute{}
+	attribute.Key = aws.String("deletion_protection.enabled")
+	if e.DeletionProtection == nil || e.DeletionProtection.Enabled == nil {
+		attribute.Value = aws.String("false")
+	} else {
+		attribute.Value = aws.String(strconv.FormatBool(aws.BoolValue(e.DeletionProtection.Enabled)))
 	}
-	if e.AccessLog != nil && e.AccessLog.S3BucketName != nil {
-		request.LoadBalancerAttributes.AccessLog.S3BucketName = e.AccessLog.S3BucketName
-	}
-	if e.AccessLog != nil && e.AccessLog.S3BucketPrefix != nil {
-		request.LoadBalancerAttributes.AccessLog.S3BucketPrefix = e.AccessLog.S3BucketPrefix
-	}
-	if e.ConnectionDraining != nil && e.ConnectionDraining.Timeout != nil {
-		request.LoadBalancerAttributes.ConnectionDraining.Timeout = e.ConnectionDraining.Timeout
-	}
-	if e.ConnectionSettings != nil && e.ConnectionSettings.IdleTimeout != nil {
-		request.LoadBalancerAttributes.ConnectionSettings.IdleTimeout = e.ConnectionSettings.IdleTimeout
-	}
+	attributes = append(attributes, attribute)
 
-	klog.V(2).Infof("Configuring ELB attributes for ELB %q", loadBalancerName)
+	attribute = &elbv2.LoadBalancerAttribute{}
+	attribute.Key = aws.String("load_balancing.cross_zone.enabled")
+	if e.CrossZoneLoadBalancing == nil || e.CrossZoneLoadBalancing.Enabled == nil {
+		attribute.Value = aws.String("false")
+	} else {
+		attribute.Value = aws.String(strconv.FormatBool(aws.BoolValue(e.CrossZoneLoadBalancing.Enabled)))
+	}
+	attributes = append(attributes, attribute)
 
-	response, err := t.Cloud.ELB().ModifyLoadBalancerAttributes(request)
+	request.Attributes = attributes
+
+	klog.V(2).Infof("Configuring NLB attributes for NLB %q", loadBalancerName)
+
+	response, err := t.Cloud.ELBV2().ModifyLoadBalancerAttributes(request)
 	if err != nil {
-		return fmt.Errorf("error configuring ELB attributes for ELB %q: %v", loadBalancerName, err)
+		return fmt.Errorf("error configuring NLB attributes for NLB %q: %v", loadBalancerName, err)
 	}
 
-	klog.V(4).Infof("modified ELB attributes for ELB %q, response %+v", loadBalancerName, response)
+	klog.V(4).Infof("modified NLB attributes for NLB %q, response %+v", loadBalancerName, response)
+
+	return nil
+}
+
+func (_ *NetworkLoadBalancer) modifyTargetGroupAttributes(t *awsup.AWSAPITarget, a, e, changes *NetworkLoadBalancer) error {
+	//TODO: this might run this file w/o changing anything if only loadbalancer attributes needs changing..
+	fmt.Println("****modifyTargetGroupAttributes:LoadBalancer_Attributes")
+	if changes.ProxyProtocolV2 == nil &&
+		changes.Stickiness == nil &&
+		changes.DeregistationDelay == nil {
+		klog.V(4).Infof("No TargetGroup changes; skipping update")
+		return nil
+	}
+
+	loadBalancerName := fi.StringValue(e.LoadBalancerName)
+	request := &elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: e.TargetGroupArn, //TODO: e or a or changes????
+	}
+
+	var attributes []*elbv2.TargetGroupAttribute
+
+	attribute := &elbv2.TargetGroupAttribute{}
+	attribute.Key = aws.String("deregistration_delay.timeout_seconds")
+	if e.DeregistationDelay == nil || e.DeregistationDelay.TimeoutSeconds == nil {
+		attribute.Value = aws.String("300")
+	} else {
+		attribute.Value = aws.String(strconv.Itoa(int(*e.DeregistationDelay.TimeoutSeconds)))
+	}
+	attributes = append(attributes, attribute)
+
+	attribute = &elbv2.TargetGroupAttribute{}
+	attribute.Key = aws.String("stickiness.enabled")
+	if e.Stickiness == nil || e.Stickiness.Enabled == nil {
+		attribute.Value = aws.String("false")
+	} else {
+		attribute.Value = aws.String(strconv.FormatBool(aws.BoolValue(e.Stickiness.Enabled)))
+	}
+	attributes = append(attributes, attribute)
+
+	attribute = &elbv2.TargetGroupAttribute{}
+	attribute.Key = aws.String("stickiness.type ")
+	attribute.Value = aws.String("source_ip") //TODO: can we set this even if enabled = false?
+	attributes = append(attributes, attribute)
+
+	attribute = &elbv2.TargetGroupAttribute{}
+	attribute.Key = aws.String("proxy_protocol_v2.enabled")
+	if e.ProxyProtocolV2 == nil || e.ProxyProtocolV2.Enabled == nil {
+		attribute.Value = aws.String("false")
+	} else {
+		attribute.Value = aws.String(strconv.FormatBool(aws.BoolValue(e.ProxyProtocolV2.Enabled)))
+	}
+	attributes = append(attributes, attribute)
+
+	request.Attributes = attributes
+
+	responseTG, err := t.Cloud.ELBV2().ModifyTargetGroupAttributes(request)
+	if err != nil {
+		return fmt.Errorf("error configuring NLB target group attributes for NLB %q: %v", loadBalancerName, err)
+	}
+
+	klog.V(4).Infof("modified NLB target group attributes for NLB %q, response %+v", loadBalancerName, responseTG)
 
 	return nil
 }

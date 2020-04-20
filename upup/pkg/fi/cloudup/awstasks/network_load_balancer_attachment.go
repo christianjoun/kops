@@ -1,106 +1,198 @@
 /*
-
-Copyright 2016 The Kubernetes Authors.
-
-
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
-
 you may not use this file except in compliance with the License.
-
 You may obtain a copy of the License at
-
-
 
     http://www.apache.org/licenses/LICENSE-2.0
 
-
-
 Unless required by applicable law or agreed to in writing, software
-
 distributed under the License is distributed on an "AS IS" BASIS,
-
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-
 See the License for the specific language governing permissions and
-
 limitations under the License.
-
 */
 
 package awstasks
 
 import (
-	"k8s.io/kops/upup/pkg/fi"
+	"fmt"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/aws/aws-sdk-go/service/elbv2"
+	"k8s.io/klog"
+	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 )
 
-// LoadBalancer manages an ELB.  We find the existing ELB using the Name tag.
-
 //go:generate fitask -type=NetworkLoadBalancerAttachment
-
 type NetworkLoadBalancerAttachment struct {
-
-	// We use the Name tag to find the existing ELB, because we are (more or less) unrestricted when
-
-	// it comes to tag values, but the LoadBalancerName is length limited
-
-	Name *string
-
+	Name      *string
 	Lifecycle *fi.Lifecycle
-}
 
-var _ fi.CompareWithID = &NetworkLoadBalancerAttachment{}
+	LoadBalancer *NetworkLoadBalancer
 
-func (e *NetworkLoadBalancerAttachment) CompareWithID() *string {
+	// LoadBalancerAttachments now support ASGs or direct instances
+	AutoscalingGroup *AutoscalingGroup
+	Subnet           *Subnet
 
-	return e.Name
-
+	// Here be dragons..
+	// This will *NOT* unmarshal.. for some reason this pointer is initiated as nil
+	// instead of a pointer to Instance with nil members..
+	Instance *Instance
 }
 
 func (e *NetworkLoadBalancerAttachment) Find(c *fi.Context) (*NetworkLoadBalancerAttachment, error) {
+	fmt.Println("****FIND:Load_balancer_attchement.go")
+	cloud := c.Cloud.(awsup.AWSCloud)
+
+	// please check in and clean up your code. I know your waiting to get this part done but still...
+	// sometimes loadbalancer does not have up to date things. we need the real one.
+	// call find on the real loadbalancer (see if you need it in the other state ever but i don't believe so)
+	// that way you can a. get the targetGroupARn.
+	// and b you can get the attached instances. and make sure that this instance is attached.
+	// :)
+
+	// Instance only
+	if e.Instance != nil && e.AutoscalingGroup == nil {
+		i, err := e.Instance.Find(c)
+		if err != nil {
+			return nil, fmt.Errorf("unable to find instance: %v", err)
+		}
+		actual := &NetworkLoadBalancerAttachment{}
+		actual.LoadBalancer = e.LoadBalancer
+		actual.Instance = i
+		return actual, nil
+		// ASG only
+	} else if e.AutoscalingGroup != nil && e.Instance == nil {
+		if aws.StringValue(e.LoadBalancer.LoadBalancerName) == "" {
+			return nil, fmt.Errorf("LoadBalancer did not have LoadBalancerName set")
+		}
+
+		//TODO: consider deleting the autoscaling group.
+		g, err := findAutoscalingGroup(cloud, *e.AutoscalingGroup.Name)
+		if err != nil {
+			return nil, err
+		}
+		if g == nil {
+			return nil, nil
+		}
+
+		tg, err := findTargetGroupByLoadBalancerName(cloud, *e.LoadBalancer.Name)
+		if err != nil {
+			fmt.Printf("error = %v", err)
+		}
+		if tg == nil { //should this return e.AutoscalingGroup w/ e.LoadBalancer?
+			return nil, nil
+		}
+
+		for _, arn := range g.TargetGroupARNs {
+			if aws.StringValue(arn) != *tg.TargetGroupArn {
+				continue
+			}
+
+			actual := &NetworkLoadBalancerAttachment{}
+			actual.LoadBalancer = e.LoadBalancer
+			actual.AutoscalingGroup = e.AutoscalingGroup
+
+			// var tmp string
+			// tmp = *e.Name + "flag"
+			// actual.Name = &tmp
+
+			// Prevent spurious changes
+			actual.Name = e.Name // ELB attachments don't have tags
+			actual.Lifecycle = e.Lifecycle
+
+			return actual, nil
+		}
+	} else {
+		// Invalid request
+		return nil, fmt.Errorf("Must specify either an instance or an ASG")
+	}
 
 	return nil, nil
-
-}
-
-var _ fi.HasAddress = &NetworkLoadBalancer{}
-
-func (e *NetworkLoadBalancerAttachment) FindIPAddress(context *fi.Context) (*string, error) {
-
-	return nil, nil
-
 }
 
 func (e *NetworkLoadBalancerAttachment) Run(c *fi.Context) error {
-
-	// TODO: Make Normalize a standard method
-
-	e.Normalize()
-
 	return fi.DefaultDeltaRunMethod(e, c)
-
-}
-
-func (e *NetworkLoadBalancerAttachment) Normalize() {
-
-	// We need to sort our arrays consistently, so we don't get spurious changes
-
-	//sort.Stable(OrderSubnetsById(e.Subnets))
-
-	//sort.Stable(OrderSecurityGroupsById(e.SecurityGroups))
-
 }
 
 func (s *NetworkLoadBalancerAttachment) CheckChanges(a, e, changes *NetworkLoadBalancerAttachment) error {
-
+	fmt.Println("****CheckChanges::Load_balancer_attchement.go")
+	if a == nil {
+		if e.LoadBalancer == nil {
+			return fi.RequiredField("LoadBalancer")
+		}
+		if e.AutoscalingGroup == nil {
+			return fi.RequiredField("AutoscalingGroup")
+		}
+	}
 	return nil
-
 }
 
 func (_ *NetworkLoadBalancerAttachment) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *NetworkLoadBalancerAttachment) error {
+	fmt.Println("****RenderAWS:Load_balancer_attchement.go")
+	if e.LoadBalancer == nil {
+		return fi.RequiredField("LoadBalancer")
+	}
+	loadBalancerName := fi.StringValue(e.LoadBalancer.LoadBalancerName)
+	if loadBalancerName == "" {
+		return fi.RequiredField("LoadBalancer.LoadBalancerName")
+	}
 
+	if e.AutoscalingGroup != nil && e.Instance == nil {
+		//request := &autoscaling.AttachLoadBalancersInput{}
+		//request.AutoScalingGroupName = e.AutoscalingGroup.Name
+		//request.LoadBalancerNames = aws.StringSlice([]string{loadBalancerName})
+
+		request := &autoscaling.AttachLoadBalancerTargetGroupsInput{}
+		request.TargetGroupARNs = []*string{e.LoadBalancer.TargetGroupArn}
+		request.AutoScalingGroupName = e.AutoscalingGroup.Name
+
+		/*input := &autoscaling.AttachLoadBalancerTargetGroupsInput{
+			AutoScalingGroupName: e.AutoscalingGroup.Name,
+			TargetGroupARNs: []*string{
+				e.LoadBalancer.TargetGroupArn,
+			},
+		}*/
+
+		klog.V(2).Infof("Attaching autoscaling group %q to NLB %q's target group", fi.StringValue(e.AutoscalingGroup.Name), loadBalancerName)
+		_, err := t.Cloud.Autoscaling().AttachLoadBalancerTargetGroups(request)
+		if err != nil {
+			return fmt.Errorf("error attaching autoscaling group to NLB's target group: %v", err)
+		}
+	} else if e.AutoscalingGroup == nil && e.Instance != nil {
+
+		//$ aws elbv2 register-targets --region us-east-1 --target-group-arn arn:aws:elasticloadbalancing:us-east-1:187640475002:targetgroup/my-targets/47e93de171b960e8 --targets Id=i-04bdc8b2e2d6fd445 Id=i-0575cea63e62788b5 Id=i-0cf172d2b85d2b8a9
+		request := &elbv2.RegisterTargetsInput{}
+		request.TargetGroupArn = e.LoadBalancer.TargetGroupArn
+		request.Targets = []*elbv2.TargetDescription{{Id: e.Instance.ID}}
+		/*request := &elbv2.RegisterTargetsInput{
+			TargetGroupArn: aws.String("arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067"),
+			Targets: []*elbv2.TargetDescription{
+				{
+					Id: e.Instance.ID,
+				},
+			},
+		}*/
+		fmt.Printf("Attaching instance %q to NLB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+		klog.V(2).Infof("Attaching instance %q to NLB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+		_, err := t.Cloud.ELBV2().RegisterTargets(request)
+		if err != nil {
+			return fmt.Errorf("error attaching instance to NLB: %v", err)
+		}
+
+		//request := &elb.RegisterInstancesWithLoadBalancerInput{}
+		//request.Instances = append(request.Instances, &elb.Instance{InstanceId: e.Instance.ID})
+		//request.LoadBalancerName = aws.String(loadBalancerName)
+
+		// klog.V(2).Infof("Attaching instance %q to ELB %q", fi.StringValue(e.Instance.ID), loadBalancerName)
+		// _, err := t.Cloud.ELB().RegisterInstancesWithLoadBalancer(request)
+		// if err != nil {
+		// 	return fmt.Errorf("error attaching instance to ELB: %v", err)
+		// }
+	}
 	return nil
-
 }

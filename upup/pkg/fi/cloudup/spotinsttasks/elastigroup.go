@@ -317,12 +317,29 @@ func (e *Elastigroup) Find(c *fi.Context) (*Elastigroup, error) {
 
 				if e.LoadBalancer != nil && actual.LoadBalancer != nil &&
 					fi.StringValue(actual.LoadBalancer.Name) != fi.StringValue(e.LoadBalancer.Name) {
-					elb, err := awstasks.FindLoadBalancerByNameTag(cloud, fi.StringValue(e.LoadBalancer.Name))
-					if err != nil {
-						return nil, err
+
+					if true {
+						panic("this code not ready for NLB")
 					}
-					if fi.StringValue(elb.LoadBalancerName) == fi.StringValue(lbs[0].Name) {
-						actual.LoadBalancer = e.LoadBalancer
+					useNLB := true
+					if useNLB {
+						elb, err := awstasks.FindNetworkLoadBalancerByNameTag(cloud, fi.StringValue(e.LoadBalancer.Name))
+						if err != nil {
+							return nil, err
+						}
+						if fi.StringValue(elb.LoadBalancerName) == fi.StringValue(lbs[0].Name) {
+							actual.LoadBalancer = e.LoadBalancer
+						}
+					}
+					useELB := true
+					if useELB {
+						elb, err := awstasks.FindLoadBalancerByNameTag(cloud, fi.StringValue(e.LoadBalancer.Name))
+						if err != nil {
+							return nil, err
+						}
+						if fi.StringValue(elb.LoadBalancerName) == fi.StringValue(lbs[0].Name) {
+							actual.LoadBalancer = e.LoadBalancer
+						}
 					}
 				}
 			}
@@ -579,6 +596,11 @@ func (_ *Elastigroup) create(cloud awsup.AWSCloud, a, e, changes *Elastigroup) e
 			// Load balancer.
 			{
 				if e.LoadBalancer != nil {
+
+					if true {
+						panic("this code is not ready for NLB")
+					}
+
 					elb, err := awstasks.FindLoadBalancerByNameTag(cloud, fi.StringValue(e.LoadBalancer.Name))
 					if err != nil {
 						return err
@@ -1053,6 +1075,11 @@ func (_ *Elastigroup) update(cloud awsup.AWSCloud, a, e, changes *Elastigroup) e
 			// Load balancer.
 			{
 				if changes.LoadBalancer != nil {
+
+					if true {
+						panic("this code is not ready for NLB")
+					}
+
 					elb, err := awstasks.FindLoadBalancerByNameTag(cloud, fi.StringValue(e.LoadBalancer.Name))
 					if err != nil {
 						return err

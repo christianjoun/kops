@@ -47,6 +47,7 @@ type SecurityGroupRule struct {
 	SourceGroup *SecurityGroup
 
 	Egress *bool
+	VPC    *VPC
 }
 
 func (e *SecurityGroupRule) Find(c *fi.Context) (*SecurityGroupRule, error) {
@@ -250,9 +251,14 @@ func (_ *SecurityGroupRule) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Secu
 				},
 			}
 		} else {
+			//ALLOW security group to use vpc cidr for network load balancer.  TODO: Ideally Precedence is actual cidr value specified when creating securitygrouprule
+			CIDR := e.CIDR
+			if e.VPC != nil /*&& CIDR == nil*/ {
+				CIDR = e.VPC.CIDR
+			}
 			// Default to 0.0.0.0/0 ?
 			ipPermission.IpRanges = []*ec2.IpRange{
-				{CidrIp: e.CIDR},
+				{CidrIp: CIDR},
 			}
 		}
 

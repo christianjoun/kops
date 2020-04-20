@@ -65,10 +65,7 @@ type LoadBalancer struct {
 	CrossZoneLoadBalancing *LoadBalancerCrossZoneLoadBalancing
 	SSLCertificateID       string
 
-	Tags         map[string]string
-	AgNames      []*string
-	UseELBForAPI *bool
-	UseNLBForAPI *bool
+	Tags map[string]string
 }
 
 var _ fi.CompareWithID = &LoadBalancer{}
@@ -389,13 +386,6 @@ func (e *LoadBalancer) Find(c *fi.Context) (*LoadBalancer, error) {
 	}
 	if e.LoadBalancerName == nil {
 		e.LoadBalancerName = actual.LoadBalancerName
-	}
-	if true {
-		actual.AgNames = e.AgNames
-		actual.UseELBForAPI = e.UseELBForAPI
-	}
-	if e.AgNames == nil {
-		e.AgNames = actual.AgNames
 	}
 
 	// We allow for the LoadBalancerName to be wrong:

@@ -90,6 +90,11 @@ func (b *KopsModelContext) LinkToELB(prefix string) *awstasks.LoadBalancer {
 	return &awstasks.LoadBalancer{Name: &name}
 }
 
+func (b *KopsModelContext) LinkToNLB(prefix string) *awstasks.NetworkLoadBalancer {
+	name := b.ELBName(prefix) //TODO: does this need to change?
+	return &awstasks.NetworkLoadBalancer{Name: &name}
+}
+
 func (b *KopsModelContext) LinkToVPC() *awstasks.VPC {
 	name := b.ClusterName()
 	return &awstasks.VPC{Name: &name}

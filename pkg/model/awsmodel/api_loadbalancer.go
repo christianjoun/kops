@@ -47,6 +47,40 @@ var _ fi.ModelBuilder = &APILoadBalancerBuilder{}
 
 // Build is responsible for building the KubeAPI tasks for the aws model
 func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
+	NLB, ELB := false, false //TOOD: change ot using lbSpec.Type == kops.LoadBalancerClassClassic && lbSpec.Type == kops.LoadBalancerClassNetwork below
+	{
+		if b.UseLoadBalancerForAPI() {
+			lbSpec := b.Cluster.Spec.API.LoadBalancer
+			switch lbSpec.Class {
+			case kops.LoadBalancerClassClassic, "":
+				ELB = true
+			case kops.LoadBalancerClassNetwork:
+				NLB = true
+			default:
+				return fmt.Errorf("Unknown cluster class specified %v", lbSpec.Class)
+			}
+		}
+
+		var agNames []*string
+
+		if !featureflag.Spotinst.Enabled() {
+			for _, ig := range b.MasterInstanceGroups() {
+				agNames = append(agNames, b.LinkToAutoscalingGroup(ig).GetName())
+			}
+		}
+
+		cleanup := &awstasks.LoadBalancerCleanup{
+			Name:         fi.String("cleanup.api." + b.ClusterName()),
+			AgNames:      agNames,
+			Lifecycle:    b.Lifecycle, //what does this even do?
+			UseELBForAPI: fi.Bool(ELB),
+			UseNLBForAPI: fi.Bool(NLB),
+			NLBName:      fi.String("api." + b.ClusterName()),
+			ELBName:      fi.String("api." + b.ClusterName()), //TODO: think about changing their names?
+		}
+		c.AddTask(cleanup)
+	}
+
 	// Configuration where an ELB fronts the API
 	if !b.UseLoadBalancerForAPI() {
 		return nil
@@ -99,30 +133,9 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 
 	var elb *awstasks.LoadBalancer
+	var nlb *awstasks.NetworkLoadBalancer
 	{
 		loadBalancerName := b.GetELBName32("api")
-
-		var agNames []*string
-
-		if !featureflag.Spotinst.Enabled() {
-			for _, ig := range b.MasterInstanceGroups() {
-				agNames = append(agNames, b.LinkToAutoscalingGroup(ig).GetName())
-			}
-		}
-
-		if false {
-			cleanup := &awstasks.LoadBalancerCleanup{
-				Name:         fi.String("cleanup.api." + b.ClusterName()),
-				AgNames:      agNames,
-				Lifecycle:    b.Lifecycle, //what does this even do?
-				UseELBForAPI: fi.Bool(false),
-				UseNLBForAPI: fi.Bool(false),
-				NLBName:      fi.String("api." + b.ClusterName()),
-				ELBName:      fi.String("api." + b.ClusterName()),
-			}
-			c.AddTask(cleanup)
-			return nil
-		}
 
 		idleTimeout := LoadBalancerDefaultIdleTimeout
 		if lbSpec.IdleTimeoutSeconds != nil {
@@ -130,6 +143,10 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 
 		listeners := map[string]*awstasks.LoadBalancerListener{
+			"443": {InstancePort: 443},
+		}
+
+		nlbListeners := map[string]*awstasks.NetworkLoadBalancerListener{
 			"443": {InstancePort: 443},
 		}
 
@@ -147,6 +164,31 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 		// Override the returned name to be the expected ELB name
 		tags["Name"] = "api." + b.ClusterName()
+
+		//NOTES:
+		/*
+			NLB health check you can't use SSL, has to be TCP
+			connection idel timeout is not configurable for nlb
+		*/
+		nlb = &awstasks.NetworkLoadBalancer{
+			Name:      fi.String("api." + b.ClusterName()),
+			Lifecycle: b.Lifecycle,
+
+			LoadBalancerName: fi.String(loadBalancerName),
+			Subnets:          elbSubnets,
+			Listeners:        nlbListeners,
+
+			// Configure fast-recovery health-checks
+			HealthCheck: &awstasks.NetworkLoadBalancerHealthCheck{
+				HealthyThreshold:   fi.Int64(2),
+				UnhealthyThreshold: fi.Int64(2),
+				Port:               fi.String("443"),
+			},
+
+			Tags: tags,
+			VPC:  b.LinkToVPC(),
+			Type: fi.String("network"),
+		}
 
 		elb = &awstasks.LoadBalancer{
 			Name:      fi.String("api." + b.ClusterName()),
@@ -172,9 +214,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 				IdleTimeout: fi.Int64(int64(idleTimeout.Seconds())),
 			},
 
-			Tags:         tags,
-			AgNames:      agNames,
-			UseELBForAPI: fi.Bool(false),
+			Tags: tags,
 		}
 
 		if lbSpec.CrossZoneLoadBalancing == nil {
@@ -185,18 +225,42 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			Enabled: lbSpec.CrossZoneLoadBalancing,
 		}
 
+		nlb.CrossZoneLoadBalancing = &awstasks.NetworkLoadBalancerCrossZoneLoadBalancing{
+			Enabled: lbSpec.CrossZoneLoadBalancing,
+		}
+
+		//TODO: consider going to this approach for attributes for NLB as shown in ensureLoadBalancerV2
+		//nlb.LoadBalancerAttributes = make(map[string]string)
+		//nlb.LoadBalancerAttributes["load_balancing.cross_zone.enabled"] = "false
+
 		switch lbSpec.Type {
 		case kops.LoadBalancerTypeInternal:
 			elb.Scheme = fi.String("internal")
+			nlb.Scheme = fi.String("internal") //TODO: test internal with NLB
 		case kops.LoadBalancerTypePublic:
 			elb.Scheme = nil
+			nlb.Scheme = nil
 		default:
-			return fmt.Errorf("unknown elb Type: %q", lbSpec.Type)
+			return fmt.Errorf("unknown elb/nlb Type: %q", lbSpec.Type)
 		}
 
-		c.AddTask(elb)
+		// if lbSpec.Class == {
+		// 	lbSpec.CrossZoneLoadBalancing = fi.Bool(false)
+		// }
+
+		if ELB {
+			c.AddTask(elb)
+		} else if NLB {
+			c.AddTask(nlb)
+		}
+
 	}
 
+	// TODO: figure out if we need to do removeExtraRules
+	// TODO: this is referenced in other parts of code, need to figure out how to stop it from being
+	// referenced
+	// I0412 16:45:28.182976   73951 loader.go:292]   tmpnlbcluster.k8s.local-addons-storage-aws.addons.k8s.io-v1.7.0
+	// error building tasks: unexpected error resolving task "LoadBalancer/api.tmpnlbcluster.k8s.local": unable to find task "SecurityGroup/api-elb.tmpnlbcluster.k8s.local", referenced from LoadBalancer/api.tmpnlbcluster.k8s.local:.SecurityGroups[0]
 	// Create security group for API ELB
 	var lbSG *awstasks.SecurityGroup
 	{
@@ -218,7 +282,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 
 	// Allow traffic from ELB to egress freely
-	{
+	if ELB {
 		t := &awstasks.SecurityGroupRule{
 			Name:          fi.String("api-elb-egress"),
 			Lifecycle:     b.SecurityLifecycle,
@@ -230,7 +294,7 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 	}
 
 	// Allow traffic into the ELB from KubernetesAPIAccess CIDRs
-	{
+	if ELB {
 		for _, cidr := range b.Cluster.Spec.KubernetesAPIAccess {
 			t := &awstasks.SecurityGroupRule{
 				Name:          fi.String("https-api-elb-" + cidr),
@@ -256,8 +320,44 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	masterGroups, err := b.GetSecurityGroups(kops.InstanceGroupRoleMaster)
+	if err != nil {
+		return err
+	}
+
+	if NLB {
+		for _, cidr := range b.Cluster.Spec.KubernetesAPIAccess {
+
+			for _, masterGroup := range masterGroups {
+				suffix := masterGroup.Suffix
+				t := &awstasks.SecurityGroupRule{
+					Name:          fi.String(fmt.Sprintf("https-nlb-to-master%s-%s", suffix, cidr)), //TODO: what is a good name for this?
+					Lifecycle:     b.SecurityLifecycle,
+					CIDR:          fi.String(cidr),
+					FromPort:      fi.Int64(443),
+					Protocol:      fi.String("tcp"),
+					SecurityGroup: masterGroup.Task,
+					ToPort:        fi.Int64(443),
+				}
+				c.AddTask(t)
+
+				// Allow ICMP traffic required for PMTU discovery
+				c.AddTask(&awstasks.SecurityGroupRule{
+					Name:          fi.String(fmt.Sprintf("icmp-pmtu-api-master%s-%s", suffix, cidr)),
+					Lifecycle:     b.SecurityLifecycle,
+					CIDR:          fi.String(cidr),
+					FromPort:      fi.Int64(3),
+					Protocol:      fi.String("icmp"),
+					SecurityGroup: masterGroup.Task,
+					ToPort:        fi.Int64(4),
+				})
+			}
+		}
+	}
+
+	//TODO: not implemented for NLB, would the security groups go to the master nodes?
 	// Add precreated additional security groups to the ELB
-	{
+	if ELB {
 		for _, id := range b.Cluster.Spec.API.LoadBalancer.AdditionalSecurityGroups {
 			t := &awstasks.SecurityGroup{
 				Name:      fi.String(id),
@@ -272,13 +372,8 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
-	masterGroups, err := b.GetSecurityGroups(kops.InstanceGroupRoleMaster)
-	if err != nil {
-		return err
-	}
-
 	// Allow HTTPS to the master instances from the ELB
-	{
+	if ELB {
 		for _, masterGroup := range masterGroups {
 			suffix := masterGroup.Suffix
 			c.AddTask(&awstasks.SecurityGroupRule{
@@ -293,6 +388,25 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	if NLB {
+		// Can tighten security by allowing only https access from the private ip's of the eni's associated with the nlb's nodes in each availability zone.
+		// Recommended approach is the whole vpc cidr https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html#target-security-groups
+		// work around suggested here https://forums.aws.amazon.com/thread.jspa?threadID=263245&start=0&tstart=0
+		// https://docs.aws.amazon.com/sdk-for-go/api/aws/arn/
+		for _, masterGroup := range masterGroups {
+			suffix := masterGroup.Suffix
+			c.AddTask(&awstasks.SecurityGroupRule{
+				Name:          fi.String(fmt.Sprintf("nlb-health-check-to-master%s", suffix)),
+				Lifecycle:     b.SecurityLifecycle,
+				FromPort:      fi.Int64(443),
+				Protocol:      fi.String("tcp"),
+				SecurityGroup: masterGroup.Task,
+				ToPort:        fi.Int64(443),
+				VPC:           b.LinkToVPC(),
+			})
+		}
+	}
+
 	if dns.IsGossipHostname(b.Cluster.Name) || b.UsePrivateDNS() {
 		// Ensure the ELB hostname is included in the TLS certificate,
 		// if we're not going to use an alias for it
@@ -302,20 +416,36 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			return fmt.Errorf("keypair/master task not found")
 		}
 		masterKeypair := masterKeypairTask.(*fitasks.Keypair)
-		masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, elb)
+		if ELB {
+			masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, elb)
+		} else if NLB {
+			masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, nlb)
+		}
+
 	}
 
+	//TODO: test this
 	// When Spotinst Elastigroups are used, there is no need to create
 	// a separate task for the attachment of the load balancer since this
 	// is already done as part of the Elastigroup's creation, if needed.
 	if !featureflag.Spotinst.Enabled() {
 		for _, ig := range b.MasterInstanceGroups() {
-			c.AddTask(&awstasks.LoadBalancerAttachment{
-				Name:             fi.String("api-" + ig.ObjectMeta.Name),
-				Lifecycle:        b.Lifecycle,
-				AutoscalingGroup: b.LinkToAutoscalingGroup(ig),
-				LoadBalancer:     b.LinkToELB("api"),
-			})
+			if ELB {
+				c.AddTask(&awstasks.LoadBalancerAttachment{
+					Name:             fi.String("api-" + ig.ObjectMeta.Name),
+					Lifecycle:        b.Lifecycle,
+					AutoscalingGroup: b.LinkToAutoscalingGroup(ig),
+					LoadBalancer:     b.LinkToELB("api"),
+				})
+			}
+			if NLB {
+				c.AddTask(&awstasks.NetworkLoadBalancerAttachment{
+					Name:             fi.String("api-" + ig.ObjectMeta.Name),
+					Lifecycle:        b.Lifecycle,
+					AutoscalingGroup: b.LinkToAutoscalingGroup(ig),
+					LoadBalancer:     b.LinkToNLB("api"),
+				})
+			}
 		}
 	}
 

@@ -91,6 +91,20 @@ func (b *DNSModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 	}
 
+	//TODO: fix this code
+	ELB := true
+	NLB := false
+
+	var targetLoadBalancer *awstasks.LoadBalancer
+	var targetNetworkLoadBalancer *awstasks.NetworkLoadBalancer
+
+	if ELB {
+		targetLoadBalancer = b.LinkToELB("api")
+	}
+	if NLB {
+		targetNetworkLoadBalancer = b.LinkToNLB("api")
+	}
+
 	if b.UseLoadBalancerForAPI() {
 		// This will point our external DNS record to the load balancer, and put the
 		// pieces together for kubectl to work
@@ -101,11 +115,12 @@ func (b *DNSModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 
 			apiDnsName := &awstasks.DNSName{
-				Name:               s(b.Cluster.Spec.MasterPublicName),
-				Lifecycle:          b.Lifecycle,
-				Zone:               b.LinkToDNSZone(),
-				ResourceType:       s("A"),
-				TargetLoadBalancer: b.LinkToELB("api"),
+				Name:                      s(b.Cluster.Spec.MasterPublicName),
+				Lifecycle:                 b.Lifecycle,
+				Zone:                      b.LinkToDNSZone(),
+				ResourceType:              s("A"),
+				TargetLoadBalancer:        targetLoadBalancer,
+				TargetNetworkLoadBalancer: targetNetworkLoadBalancer,
 			}
 			c.AddTask(apiDnsName)
 		}
@@ -121,11 +136,12 @@ func (b *DNSModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 
 			internalApiDnsName := &awstasks.DNSName{
-				Name:               s(b.Cluster.Spec.MasterInternalName),
-				Lifecycle:          b.Lifecycle,
-				Zone:               b.LinkToDNSZone(),
-				ResourceType:       s("A"),
-				TargetLoadBalancer: b.LinkToELB("api"),
+				Name:                      s(b.Cluster.Spec.MasterInternalName),
+				Lifecycle:                 b.Lifecycle,
+				Zone:                      b.LinkToDNSZone(),
+				ResourceType:              s("A"),
+				TargetLoadBalancer:        targetLoadBalancer,
+				TargetNetworkLoadBalancer: targetNetworkLoadBalancer,
 			}
 			// Using EnsureTask as MasterInternalName and MasterPublicName could be the same
 			c.EnsureTask(internalApiDnsName)
