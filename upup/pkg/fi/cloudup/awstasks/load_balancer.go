@@ -24,7 +24,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/route53"
 	"k8s.io/klog"
@@ -69,6 +68,7 @@ type LoadBalancer struct {
 	Tags         map[string]string
 	AgNames      []*string
 	UseELBForAPI *bool
+	UseNLBForAPI *bool
 }
 
 var _ fi.CompareWithID = &LoadBalancer{}
@@ -107,7 +107,7 @@ func (e *LoadBalancerListener) GetDependencies(tasks map[string]fi.Task) []fi.Ta
 	return nil
 }
 
-type deleteLoadBalancer struct {
+/*type deleteLoadBalancer struct {
 	request *elb.DeleteLoadBalancerInput
 }
 
@@ -235,7 +235,7 @@ func (e *LoadBalancer) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
 	}
 
 	return removals, nil
-}
+}*/
 
 func findLoadBalancerByLoadBalancerName(cloud awsup.AWSCloud, loadBalancerName string) (*elb.LoadBalancerDescription, error) {
 	request := &elb.DescribeLoadBalancersInput{

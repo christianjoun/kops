@@ -110,6 +110,20 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 		}
 
+		if false {
+			cleanup := &awstasks.LoadBalancerCleanup{
+				Name:         fi.String("cleanup.api." + b.ClusterName()),
+				AgNames:      agNames,
+				Lifecycle:    b.Lifecycle, //what does this even do?
+				UseELBForAPI: fi.Bool(false),
+				UseNLBForAPI: fi.Bool(false),
+				NLBName:      fi.String("api." + b.ClusterName()),
+				ELBName:      fi.String("api." + b.ClusterName()),
+			}
+			c.AddTask(cleanup)
+			return nil
+		}
+
 		idleTimeout := LoadBalancerDefaultIdleTimeout
 		if lbSpec.IdleTimeoutSeconds != nil {
 			idleTimeout = time.Second * time.Duration(*lbSpec.IdleTimeoutSeconds)
